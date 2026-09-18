@@ -1,0 +1,45 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  :root {
+    --bg-main: #060709;
+    --border-dim: #1e2230;
+    --card-surface: #0c0f18;
+  }
+}
+
+/* Custom Tactical Scrollbar */
+::-webkit-scrollbar {
+  width: 5px;
+  height: 5px;
+}
+::-webkit-scrollbar-track {
+  background: #090b10;
+}
+::-webkit-scrollbar-thumb {
+  background: #1f2536;
+  border-radius: 2px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #333b54;
+}
+
+/* Tactical Background Grid Pattern */
+.tactical-grid {
+  background-size: 32px 32px;
+  background-image: 
+    linear-gradient(to right, rgba(255, 255, 255, 0.02) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
+}
+
+.radar-sweep-bg {
+  background: conic-gradient(
+    from 0deg at 50% 50%,
+    rgba(16, 185, 129, 0) 0deg,
+    rgba(16, 185, 129, 0.05) 60deg,
+    rgba(16, 185, 129, 0.25) 120deg,
+    rgba(16, 185, 129, 0) 125deg
+  );
+}

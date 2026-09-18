@@ -1,0 +1,9 @@
+{
+  "name": "vee-alert-workspace",
+  "version": "1.0.0",
+  "description": "Vee-Alert Real-Time AI Intelligence & Crisis War Room for Infosys",
+  "scripts": {
+    "server": "npm --prefix server run dev",
+    "client": "npm --prefix client run dev"
+  }
+}
