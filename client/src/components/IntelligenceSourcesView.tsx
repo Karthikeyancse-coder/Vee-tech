@@ -81,11 +81,11 @@ export const IntelligenceSourcesView: React.FC<IntelligenceSourcesViewProps> = (
       {
         id: 'newsapi',
         name: 'NewsAPI (Global Aggregator)',
-        description: 'Global news aggregation API providing real-time news from 80,000+ sources.',
+        description: 'Global news aggregation API. Free tier: 100 req/day. Slow-polled every 15min to preserve quota.',
         type: 'REST API',
         category: 'Aggregator',
-        intervalSec: 60,
-        tags: ['REST API', 'News', 'Global', 'Real-time'],
+        intervalSec: 900,
+        tags: ['REST API', 'News', 'Global', 'Slow-Poll'],
         icon: Globe,
         iconTheme: 'bg-rose-50 text-rose-600 border-rose-100',
         status: 'Operational',
@@ -124,13 +124,13 @@ export const IntelligenceSourcesView: React.FC<IntelligenceSourcesViewProps> = (
         id: 'bluesky',
         name: 'Bluesky Social Wire',
         type: 'REST API',
-        description: 'Decentralized AT Protocol public network stream monitoring real-time enterprise announcements.',
+        description: 'Disabled: AT Protocol endpoint CDN-blocked (BunnyCDN-IN1) for Indian IP ranges. No auth fix available. Re-enable if network conditions change.',
         category: 'Social Wire',
-        intervalSec: 45,
-        tags: ['AT Protocol', 'Social Intelligence', 'Real-time', 'Decentralized'],
+        intervalSec: 0,
+        tags: ['AT Protocol', 'Social Intelligence', 'Disabled', 'CDN Blocked'],
         icon: Share2,
-        iconTheme: 'bg-sky-50 text-sky-600 border-sky-100',
-        status: 'Operational',
+        iconTheme: 'bg-slate-50 text-slate-400 border-slate-200',
+        status: 'Disabled',
         provider: 'Bluesky Network',
         apiSourceMatch: ['bluesky', 'bluesky social']
       },
@@ -165,11 +165,11 @@ export const IntelligenceSourcesView: React.FC<IntelligenceSourcesViewProps> = (
       {
         id: 'gnews',
         name: 'GNews AI-Curated Wire',
-        description: 'AI-curated global news index filtering Tier-1 enterprise IT and consulting events.',
+        description: 'AI-curated global news index. Free tier: 100 req/day. Slow-polled every 15min to preserve quota.',
         type: 'REST API',
         category: 'Aggregator',
-        intervalSec: 60,
-        tags: ['REST API', 'AI-Curated', 'Global', 'Real-time'],
+        intervalSec: 900,
+        tags: ['REST API', 'AI-Curated', 'Global', 'Slow-Poll'],
         icon: Sparkles,
         iconTheme: 'bg-emerald-50 text-emerald-600 border-emerald-100',
         status: 'Operational',
@@ -752,17 +752,31 @@ export const IntelligenceSourcesView: React.FC<IntelligenceSourcesViewProps> = (
                 <div className="flex flex-wrap items-center justify-between sm:justify-start lg:justify-between gap-3 lg:gap-5 flex-1 border-t lg:border-t-0 pt-3 lg:pt-0 border-slate-100">
                   {/* Status Badge */}
                   <div className="flex items-center gap-1.5">
-                    {isInactive ? (
-                      <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200 flex items-center gap-1.5">
-                        <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
-                        Not Configured
-                      </span>
-                    ) : (
-                      <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1.5">
-                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                        {source.status}
-                      </span>
-                    )}
+                    {(() => {
+                      const st = source.lastStatus || (source.status === 'Disabled' ? 'Not Configured' : source.status);
+                      const isDisabled = source.status === 'Disabled' || st === 'Not Configured';
+                      const isQuota = st === 'Quota Exhausted' || st === 'Quota Cooldown';
+                      const isHealthy = st === 'Operational' && !isDisabled && !isQuota;
+                      return (
+                        <span className={`px-2.5 py-1 rounded-full text-xs font-semibold border flex items-center gap-1.5 ${
+                          isDisabled
+                            ? 'bg-slate-100 text-slate-500 border-slate-200'
+                            : isQuota
+                            ? 'bg-amber-50 text-amber-700 border-amber-200'
+                            : isHealthy
+                            ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                            : 'bg-rose-50 text-rose-700 border-rose-200'
+                        }`}>
+                          <span className={`w-1.5 h-1.5 rounded-full ${
+                            isDisabled ? 'bg-slate-400'
+                            : isQuota ? 'bg-amber-500'
+                            : isHealthy ? 'bg-emerald-500 animate-pulse'
+                            : 'bg-rose-500'
+                          }`} />
+                          {isDisabled ? 'Not Configured' : st}
+                        </span>
+                      );
+                    })()}
                   </div>
 
                   {/* Polling Interval */}

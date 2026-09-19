@@ -147,12 +147,76 @@ export function updateSourceTelemetry(sourceId, updates) {
 let streamIntervalId = null;
 let registeredCallback = null;
 
-// Per-source quota cooldown: prevents hammering exhausted free-tier APIs
-// NewsAPI free plan: 100 req/24h. At 20s cycles that's 4320 req/day — quota dies in ~30 min.
-// Backoff to 30-minute cooldown windows after a 429 so quota lasts all day.
+// ============================================================================
+// PER-SOURCE RATE CONTROLS
+// ============================================================================
+// Quota cooldowns: once a free-tier API returns 429/403 we back off for 30min.
+// This keeps their daily 100-request quota alive across the full day.
 let newsApiCooldownUntil = 0;
 let gNewsCooldownUntil = 0;
 const QUOTA_BACKOFF_MS = 30 * 60 * 1000; // 30 minutes
+
+// Independent slow-poll timestamps for quota-constrained sources.
+// These fire at most once every 15 minutes, independent of the main 20s cycle.
+const SLOW_POLL_INTERVAL_MS = 15 * 60 * 1000; // 15 minutes
+let newsApiLastCalledAt = 0;
+let gNewsLastCalledAt = 0;
+
+// ============================================================================
+// SINCE-CURSOR TRACKING (incremental fetch — only new articles per cycle)
+// Each source stores the ISO timestamp of the last successfully fetched article.
+// On the next call we pass this as the "from" / "start_date" floor so APIs only
+// return articles NEWER than that, cutting raw-fetch volume dramatically.
+// ============================================================================
+const sinceTimestamps = {
+  newsapi:   null,  // ISO string or null for first run
+  gnews:     null,
+  newsdata:  null,
+  currents:  null,
+  guardian:  null
+};
+
+/**
+ * Update the since-cursor for a source after a successful fetch.
+ * Uses the most-recent published_at from returned articles as the new floor.
+ * @param {string} sourceKey - key in sinceTimestamps
+ * @param {Array<{published_at: string}>} articles - normalized articles returned
+ */
+function updateSinceCursor(sourceKey, articles) {
+  if (!articles || articles.length === 0) return;
+  const latest = articles
+    .map(a => a.published_at)
+    .filter(Boolean)
+    .map(d => new Date(d).getTime())
+    .filter(t => !isNaN(t))
+    .sort((a, b) => b - a)[0];
+  if (latest) {
+    // Subtract 60s buffer to avoid missing articles due to clock skew
+    const floor = new Date(latest - 60 * 1000).toISOString();
+    if (!sinceTimestamps[sourceKey] || floor > sinceTimestamps[sourceKey]) {
+      sinceTimestamps[sourceKey] = floor;
+    }
+  }
+}
+
+// ============================================================================
+// RSS GUID PRE-FILTER (cheap skip before the heavy dedup chain)
+// Stores the last 500 RSS item GUIDs/links seen. Anything already in this set
+// is skipped immediately, cutting most of the re-fetch noise from RSS.
+// ============================================================================
+const seenRssGuids = new Set();
+const MAX_RSS_GUIDS = 500;
+
+function isSeenRssGuid(guid) {
+  if (!guid) return false;
+  if (seenRssGuids.has(guid)) return true;
+  if (seenRssGuids.size >= MAX_RSS_GUIDS) {
+    const oldest = seenRssGuids.values().next().value;
+    if (oldest) seenRssGuids.delete(oldest);
+  }
+  seenRssGuids.add(guid);
+  return false;
+}
 
 // ============================================================================
 // 1. NEWSAPI (The Global Aggregator)
@@ -175,20 +239,33 @@ export async function fetchNewsApi(keywords = DEFAULT_KEYWORDS) {
 
   sourceTelemetry.newsapi.lastPolled = new Date().toISOString();
 
+  // Independent slow-poll gate: NewsAPI free plan = 100 req/day.
+  // Fire at most once every 15 minutes to preserve quota across the full day.
+  const nowMs = Date.now();
+  if (nowMs - newsApiLastCalledAt < SLOW_POLL_INTERVAL_MS) {
+    const waitMin = Math.ceil((SLOW_POLL_INTERVAL_MS - (nowMs - newsApiLastCalledAt)) / 60000);
+    console.log(`[NewsAPI] ⏱️ Slow-poll gate: next call in ${waitMin}min (quota-preserving 15min interval).`);
+    return [];
+  }
+  newsApiLastCalledAt = nowMs;
+
   // Strict boolean query — exactly the 4 target entities, no noise
   const strictQuery = '(Infosys OR "Tata Consultancy Services" OR Wipro OR Accenture)';
 
-  // NewsAPI handles q= via axios params which URL-encodes it correctly
+  // Build since-cursor: only fetch articles newer than last successful fetch
+  const fromParam = sinceTimestamps.newsapi || new Date(Date.now() - 60 * 60 * 1000).toISOString(); // default: last 1h on first run
+
   const url = 'https://newsapi.org/v2/everything';
-  console.log(`[NewsAPI] Querying with strict boolean query: q=${strictQuery}...`);
+  console.log(`[NewsAPI] Querying strict boolean query (from=${fromParam.slice(0, 16)})...`);
 
   try {
     const response = await axios.get(url, {
       params: {
-        q: strictQuery,          // axios auto-encodes parentheses, quotes, spaces
-        sortBy: 'publishedAt',   // Always by publish time, not relevancy
+        q: strictQuery,
+        sortBy: 'publishedAt',
         language: 'en',
-        pageSize: 20
+        pageSize: 20,
+        from: fromParam          // Only articles newer than last fetch
       },
       headers: {
         'X-Api-Key': apiKey,
@@ -214,7 +291,8 @@ export async function fetchNewsApi(keywords = DEFAULT_KEYWORDS) {
 
       sourceTelemetry.newsapi.lastStatus = 'Operational';
       sourceTelemetry.newsapi.lastCount = articles.length;
-      console.log(`[NewsAPI] \u2705 Returned ${articles.length} articles from strict boolean query.`);
+      updateSinceCursor('newsapi', articles);
+      console.log(`[NewsAPI] ✅ Returned ${articles.length} new articles (from=${fromParam.slice(0, 16)}).`);
       return articles;
     }
     sourceTelemetry.newsapi.lastStatus = 'Operational';
@@ -369,16 +447,21 @@ export async function fetchGuardianNews(keywords = 'Infosys OR TCS OR Wipro OR A
   }
 
   sourceTelemetry.guardian.lastPolled = new Date().toISOString();
-  console.log('[The Guardian] Querying premium content API (order=newest)...');
+  // Since-cursor: only articles newer than last successful Guardian fetch
+  const guardianFrom = sinceTimestamps.guardian
+    ? sinceTimestamps.guardian.slice(0, 10) // Guardian wants YYYY-MM-DD
+    : undefined;
+  console.log(`[The Guardian] Querying premium content API (order=newest${guardianFrom ? `, from-date=${guardianFrom}` : ''})...`);
 
   try {
     const response = await axios.get('https://content.guardianapis.com/search', {
       params: {
         q: keywords,
-        'api-key': apiKey,         // Appended as query param, NOT as Bearer token
+        'api-key': apiKey,
         'show-fields': 'headline,bodyText,trailText,thumbnail',
         'order-by': 'newest',
-        'page-size': 10
+        'page-size': 10,
+        ...(guardianFrom ? { 'from-date': guardianFrom } : {})
       },
       timeout: 12000,
       headers: {
@@ -405,6 +488,7 @@ export async function fetchGuardianNews(keywords = 'Infosys OR TCS OR Wipro OR A
 
       sourceTelemetry.guardian.lastStatus = 'Operational';
       sourceTelemetry.guardian.lastCount = articles.length;
+      updateSinceCursor('guardian', articles);
       console.log(`[The Guardian] ✅ Fetched ${articles.length} premium articles.`);
       return articles;
     }
@@ -486,14 +570,29 @@ export async function fetchPublisherRss() {
 
       const $ = cheerio.load(response.data, { xmlMode: true });
       const items = $('item').toArray();
+      let feedSkipped = 0;
 
       for (const el of items) {
         const title = cleanHtml($(el).find('title').text());
         const link = $(el).find('link').text().trim();
+        const guid = $(el).find('guid').text().trim() || link;
         const pubDate = $(el).find('pubDate').text().trim();
         const rawDesc = $(el).find('description').text();
         const description = cleanHtml(rawDesc);
         const sourceName = cleanHtml($(el).find('source').text()) || feed.name;
+
+        if (!title || !link) continue;
+
+        // GUID PRE-FILTER: skip already-seen items before any keyword check or dedup
+        if (isSeenRssGuid(guid)) {
+          feedSkipped++;
+          continue;
+        }
+
+        // Filter incoming XML items to ensure target keywords match
+        if (!TARGET_ENTITY_REGEX.test(title) && !TARGET_ENTITY_REGEX.test(description)) {
+          continue;
+        }
 
         // Extract image from description HTML <img> tag or <enclosure> or <media:content>
         let imageUrl = null;
@@ -519,13 +618,6 @@ export async function fetchPublisherRss() {
           }
         }
 
-        if (!title || !link) continue;
-
-        // Filter incoming XML items to ensure target keywords match
-        if (!TARGET_ENTITY_REGEX.test(title) && !TARGET_ENTITY_REGEX.test(description)) {
-          continue;
-        }
-
         aggregatedItems.push({
           api_source: feed.api_source || (feed.name.includes('Google') ? 'Google RSS' : 'Publisher RSS'),
           source_name: sourceName,
@@ -536,6 +628,7 @@ export async function fetchPublisherRss() {
           published_at: pubDate ? new Date(pubDate).toISOString() : new Date().toISOString()
         });
       }
+      if (feedSkipped > 0) console.log(`[Publisher RSS] ⏭️ ${feed.name}: skipped ${feedSkipped} already-seen GUIDs.`);
     } catch (feedErr) {
       console.warn(`[Publisher RSS] ⚠️ ${feed.name} notice: ${feedErr.message}`);
     }
@@ -580,9 +673,20 @@ export async function fetchGNews() {
     return [];
   }
 
+  // Independent slow-poll gate: GNews free plan = 100 req/day.
+  const nowGNews = Date.now();
+  if (nowGNews - gNewsLastCalledAt < SLOW_POLL_INTERVAL_MS) {
+    const waitMin = Math.ceil((SLOW_POLL_INTERVAL_MS - (nowGNews - gNewsLastCalledAt)) / 60000);
+    console.log(`[GNews] ⏱️ Slow-poll gate: next call in ${waitMin}min (quota-preserving 15min interval).`);
+    return [];
+  }
+  gNewsLastCalledAt = nowGNews;
+
   sourceTelemetry.gnews.lastPolled = new Date().toISOString();
   const strictQuery = '(Infosys OR "Tata Consultancy Services" OR Wipro OR Accenture)';
-  console.log(`[GNews] Querying global AI-curated news index (sortby=publishedAt)...`);
+  // Since-cursor: only articles published after last successful GNews fetch
+  const gNewsFrom = sinceTimestamps.gnews || new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  console.log(`[GNews] Querying AI-curated index (from=${gNewsFrom.slice(0, 16)})...`);
 
   try {
     const response = await axios.get('https://gnews.io/api/v4/search', {
@@ -591,7 +695,8 @@ export async function fetchGNews() {
         lang: 'en',
         sortby: 'publishedAt',
         max: 10,
-        apikey: apiKey
+        apikey: apiKey,
+        from: gNewsFrom           // ISO 8601 — GNews supports this param
       },
       headers: {
         'User-Agent': 'VeeAlert/1.0 (Enterprise Intelligence Platform)',
@@ -615,7 +720,8 @@ export async function fetchGNews() {
 
       sourceTelemetry.gnews.lastStatus = 'Operational';
       sourceTelemetry.gnews.lastCount = articles.length;
-      console.log(`[GNews] ✅ Returned ${articles.length} articles.`);
+      updateSinceCursor('gnews', articles);
+      console.log(`[GNews] ✅ Returned ${articles.length} new articles (from=${gNewsFrom.slice(0, 16)}).`);
       return articles;
     }
     sourceTelemetry.gnews.lastStatus = 'Operational';
@@ -658,14 +764,18 @@ export async function fetchNewsData() {
 
   sourceTelemetry.newsdata.lastPolled = new Date().toISOString();
   const strictQuery = '(Infosys OR TCS OR Wipro OR Accenture)';
-  console.log(`[NewsData] Querying NewsData.io real-time archive...`);
+  // NewsData.io supports `timeframe` param (hours, e.g. '1' = last 1 hour).
+  // We use a 1-hour window as the minimal floor; combined with sig-dedup this prevents re-fetching.
+  const newsdataTimeframe = '1'; // hours
+  console.log(`[NewsData] Querying real-time archive (timeframe=${newsdataTimeframe}h)...`);
 
   try {
     const response = await axios.get('https://newsdata.io/api/1/news', {
       params: {
         q: strictQuery,
         language: 'en',
-        apikey: apiKey
+        apikey: apiKey,
+        timeframe: newsdataTimeframe // Only articles from the last 1 hour
       },
       headers: {
         'User-Agent': 'VeeAlert/1.0 (Enterprise Intelligence Platform)',
@@ -691,7 +801,7 @@ export async function fetchNewsData() {
 
       sourceTelemetry.newsdata.lastStatus = 'Operational';
       sourceTelemetry.newsdata.lastCount = articles.length;
-      console.log(`[NewsData] ✅ Returned ${articles.length} articles.`);
+      console.log(`[NewsData] ✅ Returned ${articles.length} articles (timeframe=1h).`);
       return articles;
     }
     sourceTelemetry.newsdata.lastStatus = 'Operational';
@@ -728,14 +838,17 @@ export async function fetchCurrentsNews() {
 
   sourceTelemetry.currents.lastPolled = new Date().toISOString();
   const strictQuery = 'Infosys OR TCS OR Wipro OR Accenture';
-  console.log('[Currents] Querying Currents global news API...');
+  // Currents supports `start_date` (ISO 8601). Use since-cursor as the floor.
+  const currentsFrom = sinceTimestamps.currents || new Date(Date.now() - 60 * 60 * 1000).toISOString();
+  console.log(`[Currents] Querying global news API (start_date=${currentsFrom.slice(0, 16)})...`);
 
   try {
     const response = await axios.get('https://api.currentsapi.services/v1/search', {
       params: {
         keywords: strictQuery,
         language: 'en',
-        apiKey: apiKey
+        apiKey: apiKey,
+        start_date: currentsFrom  // Only articles newer than last successful fetch
       },
       headers: {
         'User-Agent': 'VeeAlert/1.0 (Enterprise Intelligence Platform)',
@@ -759,7 +872,8 @@ export async function fetchCurrentsNews() {
 
       sourceTelemetry.currents.lastStatus = 'Operational';
       sourceTelemetry.currents.lastCount = articles.length;
-      console.log(`[Currents] ✅ Returned ${articles.length} articles.`);
+      updateSinceCursor('currents', articles);
+      console.log(`[Currents] ✅ Returned ${articles.length} new articles (start_date=${currentsFrom.slice(0, 16)}).`);
       return articles;
     }
     sourceTelemetry.currents.lastStatus = 'Operational';
@@ -796,68 +910,16 @@ let blueskyJwtExpiry = 0;
  * @returns {Promise<Array<object>>} Normalized article array
  */
 export async function fetchBlueskyFeed() {
-  sourceTelemetry.bluesky.lastPolled = new Date().toISOString();
-  const query = '(Infosys OR "Tata Consultancy Services" OR TCS OR Wipro OR Accenture OR Finacle)';
-  console.log('[Bluesky] ⚡ Querying AT Protocol public search wire...');
-
-  try {
-    const response = await axios.get('https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts', {
-      params: {
-        q: query,
-        limit: 20
-      },
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
-        'Accept': 'application/json, text/plain, */*'
-      },
-      timeout: 4000 // Strict 4s timeout per trial specification
-    });
-
-    if (response.data && Array.isArray(response.data.posts)) {
-      const posts = [];
-      for (const post of response.data.posts) {
-        if (!post.record?.text) continue;
-        const text = cleanHtml(post.record.text);
-        const handle = post.author?.handle || 'bluesky';
-        const rkey = post.uri ? post.uri.split('/').pop() : '';
-        const postUrl = rkey ? `https://bsky.app/profile/${handle}/post/${rkey}` : `https://bsky.app/profile/${handle}`;
-        let thumb = post.embed?.images?.[0]?.thumb || null;
-
-        // Check if post text contains an external URL to enrich with Cheerio
-        const urlMatch = text.match(/https?:\/\/[^\s]+/i);
-        let enrichedContent = text;
-        if (urlMatch && urlMatch[0] && !urlMatch[0].includes('bsky.app')) {
-          const enriched = await enrichSocialUrl(urlMatch[0]);
-          if (enriched) {
-            enrichedContent = `${text}\n\n[Linked Article]: ${enriched.title}${enriched.description ? ` — ${enriched.description}` : ''}`;
-            if (!thumb && enriched.image) thumb = enriched.image;
-          }
-        }
-
-        posts.push({
-          api_source: 'Bluesky Social',
-          source_name: `@${handle}`,
-          title: text.length > 95 ? `${text.slice(0, 92)}...` : text,
-          url: postUrl,
-          image_url: thumb,
-          raw_content: enrichedContent,
-          published_at: post.record?.createdAt ? new Date(post.record.createdAt).toISOString() : new Date().toISOString()
-        });
-      }
-
-      sourceTelemetry.bluesky.lastStatus = 'Operational';
-      sourceTelemetry.bluesky.lastCount = posts.length;
-      console.log(`[Bluesky] ✅ Returned ${posts.length} real-time posts.`);
-      return posts;
-    }
-    sourceTelemetry.bluesky.lastStatus = 'Operational';
-    sourceTelemetry.bluesky.lastCount = 0;
-    return [];
-  } catch (error) {
-    sourceTelemetry.bluesky.lastStatus = 'Error';
-    console.warn(`[Bluesky] ⚠️ AT Protocol query notice: ${error.message}`);
-    return [];
-  }
+  // ── BLUESKY DISABLED ──────────────────────────────────────────────────────
+  // public.api.bsky.app is CDN-blocked (BunnyCDN-IN1) for Indian IP ranges.
+  // This is a network-level block, not a missing auth token — no fix possible
+  // from the client side without a VPN/proxy. Disabling cleanly to stop burning
+  // 4s of timeout per cycle for zero return.
+  // Status: Not Configured. Re-enable if network conditions change.
+  // ─────────────────────────────────────────────────────────────────────────
+  sourceTelemetry.bluesky.lastStatus = 'Not Configured';
+  sourceTelemetry.bluesky.lastCount = 0;
+  return [];
 }
 
 // Backwards-compatibility alias
@@ -883,25 +945,24 @@ export async function fetchMultiSourceNews(processIngestCallback) {
 
   const cycleTime = new Date().toLocaleTimeString('en-IN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
   console.log('\n================== [INGESTION CYCLE: ' + cycleTime + '] ==================');
-  console.log('⚡ [Multi-Source Engine] Commencing Concurrent 7-Source Ingestion:');
-  console.log('   1. NewsAPI        (Global 24/7 Wire — sortBy=publishedAt)');
-  console.log('   2. Currents API   (Global Live Stream — verified multi-lingual)');
-  console.log('   3. GNews          (AI-Curated Global Index — sortby=publishedAt)');
-  console.log('   4. NewsData.io    (Real-Time Archive — language=en)');
-  console.log('   5. The Guardian   (Premium Wire — order=newest)');
-  console.log('   6. Publisher RSS  (Google News RSS + Economic Times Wires)');
-  console.log('   7. Bluesky Social (AT Protocol Decentralized HTTP Trial — 4s timeout)');
+  console.log('⚡ [Multi-Source Engine] Commencing Concurrent 6-Source Ingestion:');
+  console.log('   1. NewsAPI        (15min slow-poll | since-cursor | 100 req/day quota)');
+  console.log('   2. Currents API   (Every cycle | since-cursor start_date)');
+  console.log('   3. GNews          (15min slow-poll | since-cursor from | 100 req/day quota)');
+  console.log('   4. NewsData.io    (Every cycle | timeframe=1h window)');
+  console.log('   5. The Guardian   (Every cycle | since-cursor from-date)');
+  console.log('   6. Publisher RSS  (Every cycle | GUID pre-filter + entity filter)');
+  console.log('   [Bluesky: Disabled — CDN-blocked IN region, Not Configured]');
   console.log('=========================================================================');
 
-  // Execute all 7 sources concurrently with fault-isolation
+  // Execute 6 active sources concurrently (Bluesky disabled — CDN-blocked)
   const results = await Promise.allSettled([
     fetchNewsApi(),
     fetchCurrentsNews(),
     fetchGNews(),
     fetchNewsData(),
     fetchGuardianNews(),
-    fetchPublisherRss(),
-    fetchBlueskyFeed()
+    fetchPublisherRss()
   ]);
 
   const rawAggregatedArticles = [];
@@ -911,8 +972,7 @@ export async function fetchMultiSourceNews(processIngestCallback) {
     GNews: 0,
     NewsData: 0,
     'The Guardian API': 0,
-    'Publisher RSS': 0,
-    'Bluesky Social': 0
+    'Publisher RSS': 0
   };
 
   const sourceNames = [
@@ -921,8 +981,7 @@ export async function fetchMultiSourceNews(processIngestCallback) {
     'GNews',
     'NewsData',
     'The Guardian API',
-    'Publisher RSS',
-    'Bluesky Social'
+    'Publisher RSS'
   ];
 
   results.forEach((result, idx) => {
@@ -938,13 +997,13 @@ export async function fetchMultiSourceNews(processIngestCallback) {
     }
   });
 
+  const rawTotal = rawAggregatedArticles.length;
   console.log(
     `\n[Fetch Sources] NewsAPI: ${sourceCounts['NewsAPI']} | Currents: ${sourceCounts['Currents API']} | ` +
     `GNews: ${sourceCounts['GNews']} | NewsData: ${sourceCounts['NewsData']} | ` +
-    `Guardian: ${sourceCounts['The Guardian API']} | RSS: ${sourceCounts['Publisher RSS']} | ` +
-    `Bluesky: ${sourceCounts['Bluesky Social']}`
+    `Guardian: ${sourceCounts['The Guardian API']} | RSS: ${sourceCounts['Publisher RSS']}`
   );
-  console.log(`[MultiSource] Aggregated ${rawAggregatedArticles.length} raw articles total. Starting dedup & triage...`);
+  console.log(`[MultiSource] RAW FETCH TOTAL: ${rawTotal} articles. Starting dedup & triage...`);
 
   const ingestedArticles = [];
 
