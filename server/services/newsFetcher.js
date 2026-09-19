@@ -147,6 +147,13 @@ export function updateSourceTelemetry(sourceId, updates) {
 let streamIntervalId = null;
 let registeredCallback = null;
 
+// Per-source quota cooldown: prevents hammering exhausted free-tier APIs
+// NewsAPI free plan: 100 req/24h. At 20s cycles that's 4320 req/day — quota dies in ~30 min.
+// Backoff to 30-minute cooldown windows after a 429 so quota lasts all day.
+let newsApiCooldownUntil = 0;
+let gNewsCooldownUntil = 0;
+const QUOTA_BACKOFF_MS = 30 * 60 * 1000; // 30 minutes
+
 // ============================================================================
 // 1. NEWSAPI (The Global Aggregator)
 // ============================================================================
@@ -155,6 +162,14 @@ export async function fetchNewsApi(keywords = DEFAULT_KEYWORDS) {
 
   if (!apiKey) {
     console.log('[NewsAPI] NEWSAPI_KEY not configured in .env; skipping source.');
+    return [];
+  }
+
+  // Quota cooldown: skip if we hit the daily limit recently
+  if (Date.now() < newsApiCooldownUntil) {
+    const mins = Math.ceil((newsApiCooldownUntil - Date.now()) / 60000);
+    console.log(`[NewsAPI] ⏳ Daily quota exhausted — cooling down for another ${mins}min. Skipping.`);
+    sourceTelemetry.newsapi.lastStatus = 'Quota Cooldown';
     return [];
   }
 
@@ -207,11 +222,12 @@ export async function fetchNewsApi(keywords = DEFAULT_KEYWORDS) {
     return [];
   } catch (error) {
     if (error.response?.status === 429) {
-      sourceTelemetry.newsapi.lastStatus = 'Rate Limited';
-      console.warn('[NewsAPI] \u26a0\ufe0f Rate limited (HTTP 429). Pausing NewsAPI for this cycle.');
+      sourceTelemetry.newsapi.lastStatus = 'Quota Exhausted';
+      newsApiCooldownUntil = Date.now() + QUOTA_BACKOFF_MS;
+      console.warn(`[NewsAPI] ⚠️ Daily quota exhausted (HTTP 429). Backing off for 30 min until ${new Date(newsApiCooldownUntil).toLocaleTimeString()}.`);
     } else {
       sourceTelemetry.newsapi.lastStatus = 'Error';
-      console.error(`[NewsAPI] \u274c Fetch Failed: ${error.response?.status || 'ERR'} - ${error.response?.data?.message || error.message}`);
+      console.error(`[NewsAPI] ❌ Fetch Failed: ${error.response?.status || 'ERR'} - ${error.response?.data?.message || error.message}`);
     }
     return [];
   }
@@ -556,6 +572,14 @@ export async function fetchGNews() {
     return [];
   }
 
+  // Quota cooldown: GNews free plan = 100 req/day. Back off for 30min after quota hit.
+  if (Date.now() < gNewsCooldownUntil) {
+    const mins = Math.ceil((gNewsCooldownUntil - Date.now()) / 60000);
+    console.log(`[GNews] ⏳ Daily quota exhausted — cooling down for another ${mins}min. Skipping.`);
+    sourceTelemetry.gnews.lastStatus = 'Quota Cooldown';
+    return [];
+  }
+
   sourceTelemetry.gnews.lastPolled = new Date().toISOString();
   const strictQuery = '(Infosys OR "Tata Consultancy Services" OR Wipro OR Accenture)';
   console.log(`[GNews] Querying global AI-curated news index (sortby=publishedAt)...`);
@@ -598,12 +622,17 @@ export async function fetchGNews() {
     sourceTelemetry.gnews.lastCount = 0;
     return [];
   } catch (error) {
-    if (error.response?.status === 429 || error.response?.status === 401 || error.response?.status === 403) {
-      sourceTelemetry.gnews.lastStatus = 'Rate Limited';
-      console.warn(`[GNews] ⚠️ API unavailable or rate limited. (HTTP ${error.response.status})`);
+    if (error.response?.status === 429 || error.response?.status === 403) {
+      gNewsCooldownUntil = Date.now() + QUOTA_BACKOFF_MS;
+      sourceTelemetry.gnews.lastStatus = 'Quota Exhausted';
+      const msg = error.response?.data?.errors?.[0] || error.response?.data?.message || `HTTP ${error.response?.status}`;
+      console.warn(`[GNews] ⚠️ Quota exhausted: ${msg}. Backing off 30min until ${new Date(gNewsCooldownUntil).toLocaleTimeString()}.`);
+    } else if (error.response?.status === 401) {
+      sourceTelemetry.gnews.lastStatus = 'Unauthorized';
+      console.warn('[GNews] ⚠️ 401 Unauthorized — check GNEWS_API_KEY in server/.env.');
     } else {
       sourceTelemetry.gnews.lastStatus = 'Error';
-      console.warn(`[GNews] ⚠️ API unavailable or rate limited. (${error.message})`);
+      console.warn(`[GNews] ⚠️ API error: ${error.message}`);
     }
     return [];
   }
