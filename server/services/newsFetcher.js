@@ -594,6 +594,19 @@ export async function fetchPublisherRss() {
           continue;
         }
 
+        // Recency guardrail: Reject any item published > 12 hours ago
+        if (pubDate) {
+          const pubTime = new Date(pubDate).getTime();
+          if (!isNaN(pubTime)) {
+            const ageHours = (Date.now() - pubTime) / (3600 * 1000);
+            if (ageHours > 12) {
+              const ageDesc = ageHours >= 48 ? `${(ageHours / 24).toFixed(1)} days` : `${ageHours.toFixed(1)} hours`;
+              console.log(`[Publisher RSS] 🚫 DROPPED STALE: "${title.slice(0, 50)}..." (published ${ageDesc} ago exceeds 12h window)`);
+              continue;
+            }
+          }
+        }
+
         // Extract image from description HTML <img> tag or <enclosure> or <media:content>
         let imageUrl = null;
         if (rawDesc) {

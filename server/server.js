@@ -19,6 +19,8 @@ import {
   stopLiveNewsFeed,
   sourceTelemetry
 } from './services/newsFetcher.js';
+import { IngestionGateway } from './services/ingestion/IngestionGateway.js';
+import { SearchService } from './services/SearchService.js';
 
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -182,6 +184,26 @@ export function evaluateAlertRules(triage) {
     requiresVoice: requiresVoice || (isClient && triage.risk_level === 'Critical')
   };
 }
+
+// Low-Latency Parallel Ingestion Gateway
+export const ingestionGateway = new IngestionGateway({
+  supabase,
+  maxArticleAgeHours: 12,
+  ollamaBaseUrl: OLLAMA_BASE_URL,
+  ollamaModel: OLLAMA_MODEL,
+  alertRulesEvaluator: evaluateAlertRules,
+  notifiers: {
+    sendSlackAlert,
+    sendWhatsAppAlert,
+    sendEmailAlert,
+    triggerVoiceCall
+  },
+  onArticleCommitted: (article) => {
+    // Keep in-memory cache synchronized for fast client reads
+    memoryArticles.unshift(article);
+    if (memoryArticles.length > 500) memoryArticles.pop();
+  }
+});
 
 /**
  * Startup warm-up ping for local Ollama model to ensure weights are pre-loaded in VRAM
@@ -616,6 +638,22 @@ export async function processIngest(payload) {
   const normalizedUrl = url ? String(url).trim() : null;
 
   // ============================================================================
+  // RECENCY GUARDRAIL: HARD 12-HOUR CUTOFF BEFORE ANY DEDUP OR DB COMMIT
+  // Enforce uniform maximum article age across all ingestion channels
+  // ============================================================================
+  if (published_at) {
+    const pubTime = new Date(published_at).getTime();
+    if (!isNaN(pubTime)) {
+      const ageHours = (Date.now() - pubTime) / (3600 * 1000);
+      if (ageHours > 12) {
+        const ageDesc = ageHours >= 48 ? `${(ageHours / 24).toFixed(1)} days` : `${ageHours.toFixed(1)} hours`;
+        console.log(`[Guardrail] 🚫 DROPPED STALE: "${effectiveTitle.slice(0, 50)}..." (published ${ageDesc} ago exceeds 12h window)`);
+        return { success: true, skipped: true, reason: `Article published ${ageDesc} ago exceeds 12h recency window` };
+      }
+    }
+  }
+
+  // ============================================================================
   // PHASE 0: SHA-256 PRE-DATABASE O(1) DEDUPLICATION INTERCEPT
   // Reject existing hashes in O(1) time before any database queries or LLM calls occur
   // ============================================================================
@@ -920,7 +958,7 @@ app.get('/api/sources', (_req, res) => {
       id: 'gdelt',
       name: 'GDELT DOC 2.0 (Global Discovery)',
       type: 'REST API',
-      configured: true,
+      configured: false, // Inactive upstream (infinite TLS renegotiation)
       provider: 'GDELT Project',
       category: 'Discovery',
       intervalSec: 60
@@ -987,40 +1025,131 @@ app.get('/api/sources', (_req, res) => {
       provider: 'The Guardian OpenPlatform',
       category: 'Publisher',
       intervalSec: 60
+    },
+    {
+      id: 'eventregistry',
+      name: 'Event Registry (Minute Stream)',
+      type: 'Minute Stream',
+      configured: Boolean((process.env.EVENT_REGISTRY_API_KEY || '').trim()),
+      provider: 'Event Registry',
+      category: 'Wire',
+      intervalSec: 60
     }
   ];
 
+  const gatewayHealth = ingestionGateway ? ingestionGateway.getHealthSummary() : null;
+  const providerHealthMap = {};
+  if (gatewayHealth && Array.isArray(gatewayHealth.providers)) {
+    for (const p of gatewayHealth.providers) {
+      providerHealthMap[p.providerName] = p;
+    }
+  }
+
   const enrichedSources = sourcesConfig.map((s) => {
     const telem = sourceTelemetry[s.id] || {};
+    const adapterHealth = providerHealthMap[s.id] || {};
+
+    let status = adapterHealth.status || telem.lastStatus || (s.configured ? 'Operational' : 'Disabled');
+    if (status === 'HEALTHY' || status === 'POLLING' || status === 'CONNECTED') status = 'Operational';
+    if (status === 'RATE_LIMITED') status = 'Rate Limited';
+    if (status === 'DEGRADED') status = 'Degraded';
+    if (status === 'DISABLED') status = 'Disabled';
+
     return {
       ...s,
-      lastPolled: telem.lastPolled || null,
-      lastStatus: telem.lastStatus || (s.configured ? 'Operational' : 'Disabled'),
-      lastCount: typeof telem.lastCount === 'number' ? telem.lastCount : 0,
-      lastNewArticle: telem.lastNewArticle || null
+      lastPolled: adapterHealth.lastSuccessAt || adapterHealth.lastFailureAt || telem.lastPolled || null,
+      lastStatus: status,
+      lastCount: adapterHealth.successCount ?? (typeof telem.lastCount === 'number' ? telem.lastCount : 0),
+      lastNewArticle: adapterHealth.lastArticleAt || telem.lastNewArticle || null,
+      metrics: {
+        requests: adapterHealth.requests || 0,
+        errors: adapterHealth.errorCount || 0,
+        rateLimits: adapterHealth.rateLimitCount || 0,
+        averageLatencyMs: adapterHealth.averageLatencyMs || 0,
+        p95LatencyMs: adapterHealth.p95LatencyMs || 0,
+        eventsPerMinute: adapterHealth.eventsPerMinute || 0
+      }
     };
   });
 
   res.json({ sources: enrichedSources });
 });
 
+// GET /api/providers/health - Real-time Provider Adapter & Gateway Health
+app.get('/api/providers/health', (_req, res) => {
+  if (!ingestionGateway) {
+    return res.status(503).json({ error: 'Ingestion gateway not initialized' });
+  }
+  res.json(ingestionGateway.getHealthSummary());
+});
+
+// GET /api/search/live - Ultra-fast multi-source on-demand news search (Google News RSS + GDELT 2.0)
+app.get('/api/search/live', async (req, res) => {
+  try {
+    const query = req.query.query || req.query.q || 'Infosys';
+    const limit = parseInt(req.query.limit, 10) || 50;
+    const result = await SearchService.searchAll(query, { maxResults: limit });
+    res.json(result);
+  } catch (err) {
+    res.status(500).json({ error: 'Search failed', message: err.message });
+  }
+});
+
 // GET /api/articles - Fetch active crisis feeds
 app.get('/api/articles', async (_req, res) => {
   try {
+    let rows = [];
     if (supabase) {
       const { data, error } = await supabase
         .from('articles')
         .select('*')
-        .eq('status', 'ACTIVE')
-        .order('ingested_at', { ascending: false });
+        .not('status', 'eq', 'DUPLICATE')
+        .order('ingested_at', { ascending: false })
+        .limit(300);
 
       if (error) throw error;
-      return res.json({ articles: data || [] });
+      rows = data || [];
+    } else {
+      rows = memoryArticles.filter(a => a.status !== 'DUPLICATE');
     }
-    return res.json({ articles: memoryArticles });
-  } catch (error) {
-    return res.json({ articles: memoryArticles });
+
+    // Enrich rows to satisfy the full Frontend Data Contract (Section 44)
+    const enriched = rows.map((art) => {
+      const cluster = ingestionGateway?.deduplicator?.storyClusters ? 
+        Array.from(ingestionGateway.deduplicator.storyClusters.values()).find(c => c.articles.includes(art.id)) : null;
+
+      return {
+        ...art,
+        articleId: art.id,
+        provider: art.api_source,
+        publisher: art.source_name,
+        publishedAt: art.published_at,
+        receivedAt: art.received_at || art.ingested_at,
+        detectedAt: art.ingested_at,
+        triagedAt: art.triaged_at,
+        dispatchedAt: art.dispatched_at,
+        severity: art.risk_level,
+        riskScore: art.risk_score,
+        entities: [art.entity_mentioned].filter(Boolean),
+        themes: [art.theme].filter(Boolean),
+        summary: art.five_bullet_summary,
+        storyClusterId: cluster?.id || null,
+        sourceCount: cluster?.publishers?.size || 1,
+        duplicateStatus: art.duplicate_status || (art.status === 'DUPLICATE' ? 'EXACT_DUPLICATE' : 'UNIQUE')
+      };
+    });
+
+    return res.json({ articles: enriched });
+  } catch (err) {
+    console.error('[Articles Route Error]', err.message);
+    return res.status(500).json({ error: err.message, articles: [] });
   }
+});
+
+// GET /api/duplicates - Audit trail of dropped duplicate articles
+app.get('/api/duplicates', (_req, res) => {
+  const audit = ingestionGateway?.deduplicator?.getDuplicateAuditTrail() || [];
+  res.json({ total: audit.length, duplicates: audit });
 });
 
 // PATCH /api/articles/:id/acknowledge
@@ -1186,8 +1315,8 @@ if (!isTestRun) {
     // Hydrate source telemetry with most recent article timestamps from DB
     await initSourceTelemetryFromDb();
 
-    // Start the automated continuous ingestion engine on server boot
-    startBackgroundIngestion();
+    // Start the low-latency parallel ingestion gateway
+    await ingestionGateway.start();
   });
 }
 

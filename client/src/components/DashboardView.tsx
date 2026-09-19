@@ -575,6 +575,7 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       <DetectionLatencyBadge
                         publishedAt={article.published_at}
                         detectedAt={article.ingested_at}
+                        apiSource={article.api_source}
                         variant="inline"
                       />
                     </div>

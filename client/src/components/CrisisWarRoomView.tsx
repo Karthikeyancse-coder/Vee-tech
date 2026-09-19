@@ -24,7 +24,7 @@ import {
 import { Article } from '../hooks/useWarRoom';
 import { DetectionLatencyBadge } from './DetectionLatencyBadge';
 import { ArticleLifecycleTimeline } from './ArticleLifecycleTimeline';
-import { calculateAggregateLatencyMetrics } from '../utils/detectionLatency';
+import { calculateAggregateLatencyMetrics, calculateSplitLatencyMetrics } from '../utils/detectionLatency';
 
 interface CrisisWarRoomViewProps {
   articles: Article[];
@@ -324,6 +324,15 @@ export const CrisisWarRoomView: React.FC<CrisisWarRoomViewProps> = ({
   // Detection Performance aggregate metrics across real timestamps in operational live window
   const latencyMetrics = useMemo(() => {
     return calculateAggregateLatencyMetrics(articles, {
+      maxLatencyHours: 24,
+      publishedWithinHours: 24,
+      scopeLabel: 'Last 24 hours'
+    });
+  }, [articles]);
+
+  // Detection Performance split metrics: Push (WebSocket) vs Polled/Aggregated (RSS/APIs)
+  const splitLatency = useMemo(() => {
+    return calculateSplitLatencyMetrics(articles, {
       maxLatencyHours: 24,
       publishedWithinHours: 24,
       scopeLabel: 'Last 24 hours'
@@ -659,24 +668,46 @@ export const CrisisWarRoomView: React.FC<CrisisWarRoomViewProps> = ({
                           {/* API Source Tag + Aggregated vs Direct-Wire indicator */}
                           {(() => {
                             const src = (article.api_source || '').toLowerCase();
-                            const isAggregator = src.includes('rss') || src.includes('google') || src.includes('newsdata') || src.includes('gnews');
+                            // Bluesky Jetstream is a live WebSocket firehose — genuinely real-time
+                            const isRealTimeStream = src.includes('bluesky') || src.includes('jetstream') || src.includes('firehose');
+                            // All polling/REST aggregator sources — upstream lag is real and outside our control
+                            const isAggregator = !isRealTimeStream && (
+                              src.includes('rss') ||
+                              src.includes('google') ||
+                              src.includes('newsdata') ||
+                              src.includes('gnews') ||
+                              src.includes('guardian') ||
+                              src.includes('institutional') ||
+                              src.includes('newsapi') ||
+                              src.includes('currents') ||
+                              src.includes('event registry') ||
+                              src.includes('gdelt')
+                            );
                             return (
                               <>
                                 <span className="px-1.5 py-0.2 rounded bg-slate-100 text-slate-500 text-[9px] uppercase font-bold tracking-wider border border-slate-200">
                                   VIA {article.api_source?.toUpperCase() || 'GOOGLE RSS'}
                                 </span>
+                                {isRealTimeStream && (
+                                  <span
+                                    title="Bluesky Jetstream WebSocket firehose — genuine real-time push stream. Detection latency is typically seconds from publication."
+                                    className="px-1.5 py-0.2 rounded bg-emerald-50 text-emerald-700 text-[9px] uppercase font-bold tracking-wider border border-emerald-200 cursor-help"
+                                  >
+                                    REAL-TIME STREAM
+                                  </span>
+                                )}
                                 {isAggregator && (
                                   <span
-                                    title="Aggregated source — publisher → aggregator → us. Upstream lag of 5–60min is normal and outside our control."
+                                    title="Aggregated source — publisher → aggregator → us. Upstream lag of 5–60min is normal and outside our control. Do NOT interpret detection time as publication time."
                                     className="px-1.5 py-0.2 rounded bg-amber-50 text-amber-600 text-[9px] uppercase font-bold tracking-wider border border-amber-200 cursor-help"
                                   >
                                     AGGREGATED
                                   </span>
                                 )}
-                                {!isAggregator && (
+                                {!isRealTimeStream && !isAggregator && (
                                   <span
-                                    title="Direct-wire API — lowest upstream lag, typically &lt;5 min from publication."
-                                    className="px-1.5 py-0.2 rounded bg-emerald-50 text-emerald-700 text-[9px] uppercase font-bold tracking-wider border border-emerald-200 cursor-help"
+                                    title="Direct-wire API — lowest upstream lag for this source type."
+                                    className="px-1.5 py-0.2 rounded bg-blue-50 text-blue-600 text-[9px] uppercase font-bold tracking-wider border border-blue-200 cursor-help"
                                   >
                                     DIRECT WIRE
                                   </span>
@@ -725,6 +756,7 @@ export const CrisisWarRoomView: React.FC<CrisisWarRoomViewProps> = ({
                         <DetectionLatencyBadge
                           publishedAt={article.published_at}
                           detectedAt={article.ingested_at}
+                          apiSource={article.api_source}
                         />
                       </div>
 
@@ -881,38 +913,94 @@ export const CrisisWarRoomView: React.FC<CrisisWarRoomViewProps> = ({
             </div>
           </div>
 
-          {/* Card 2: Detection Performance (Real Timestamps in Live Window) */}
-          <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-2xs space-y-3">
+          {/* Card 2: Detection Performance Split by Source Type (Push vs Polled) */}
+          <div className="bg-white border border-slate-200 rounded-xl p-3.5 shadow-2xs space-y-2.5">
             <div className="flex items-center justify-between pb-1 border-b border-slate-100">
               <div className="flex items-center gap-2">
                 <Clock className="w-4 h-4 text-emerald-600" />
                 <div>
                   <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wide">Detection Velocity</h3>
-                  <p className="text-[10px] text-slate-400">Live Window ({latencyMetrics.scopeLabel})</p>
+                  <p className="text-[10px] text-slate-400">Split by Ingestion Source Type</p>
                 </div>
               </div>
-              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-mono">
-                ≤ 2m Target
+              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-slate-600 border border-slate-200 font-mono uppercase">
+                PUSH VS POLLED
               </span>
             </div>
 
-            <div className="grid grid-cols-2 gap-2.5 pt-1">
-              <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100">
-                <div className="text-[11px] text-slate-500 font-medium">Avg Detection</div>
-                <div className="text-lg font-bold text-slate-900 mt-0.5 font-mono">
-                  {latencyMetrics.formattedAverage}
+            {/* PUSH STREAM (Bluesky Jetstream WebSocket) */}
+            <div className="rounded-lg bg-emerald-50/50 border border-emerald-200/80 p-2 space-y-1">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <span className="relative flex h-2 w-2">
+                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                    <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                  </span>
+                  <span className="text-[10px] font-bold text-emerald-950 uppercase tracking-wide">
+                    Push Stream
+                  </span>
+                  <span className="text-[9px] text-emerald-700 font-medium hidden sm:inline">
+                    (Bluesky Jetstream)
+                  </span>
+                </div>
+                <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-emerald-100 text-emerald-800 border border-emerald-300 font-mono">
+                  ≤ 2m Target
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                <div className="bg-white/90 rounded border border-emerald-200/60 px-2 py-1">
+                  <div className="text-[9px] text-slate-500 font-medium">Avg Detection</div>
+                  <div className="text-sm font-bold text-emerald-950 font-mono">
+                    {splitLatency.push.formattedAverage}
+                  </div>
+                </div>
+                <div className="bg-white/90 rounded border border-emerald-200/60 px-2 py-1">
+                  <div className="text-[9px] text-slate-500 font-medium">P95 Detection</div>
+                  <div className="text-sm font-bold text-emerald-950 font-mono">
+                    {splitLatency.push.formattedP95}
+                  </div>
                 </div>
               </div>
-              <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100">
-                <div className="text-[11px] text-slate-500 font-medium">P95 Detection</div>
-                <div className="text-lg font-bold text-slate-900 mt-0.5 font-mono">
-                  {latencyMetrics.formattedP95}
-                </div>
+              <div className="text-[8.5px] text-emerald-800/80 font-mono flex items-center justify-between px-0.5">
+                <span>Direct WebSocket Firehose</span>
+                <span>{splitLatency.push.count} articles</span>
               </div>
             </div>
-            <div className="text-[10px] text-slate-400 font-mono text-center">
-              Evaluated across {latencyMetrics.count} valid live articles
-              {latencyMetrics.archivalCount > 0 && ` (${latencyMetrics.archivalCount} archival excluded)`}
+
+            {/* POLLED / AGGREGATED (Google RSS, News APIs, Institutional Wires) */}
+            <div className="rounded-lg bg-slate-50 border border-slate-200/80 p-2 space-y-1">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-amber-500" />
+                  <span className="text-[10px] font-bold text-slate-800 uppercase tracking-wide">
+                    Polled & Aggregated
+                  </span>
+                  <span className="text-[9px] text-slate-400 font-medium hidden sm:inline">
+                    (RSS / APIs)
+                  </span>
+                </div>
+                <span className="text-[9px] font-bold px-1.5 py-0.2 rounded bg-amber-50 text-amber-700 border border-amber-200 font-mono">
+                  ≤ 3h Target
+                </span>
+              </div>
+              <div className="grid grid-cols-2 gap-1.5">
+                <div className="bg-white rounded border border-slate-200/60 px-2 py-1">
+                  <div className="text-[9px] text-slate-500 font-medium">Avg Detection</div>
+                  <div className="text-sm font-bold text-slate-900 font-mono">
+                    {splitLatency.polled.formattedAverage}
+                  </div>
+                </div>
+                <div className="bg-white rounded border border-slate-200/60 px-2 py-1">
+                  <div className="text-[9px] text-slate-500 font-medium">P95 Detection</div>
+                  <div className="text-sm font-bold text-slate-900 font-mono">
+                    {splitLatency.polled.formattedP95}
+                  </div>
+                </div>
+              </div>
+              <div className="text-[8.5px] text-slate-500 font-mono flex items-center justify-between px-0.5">
+                <span>Upstream Syndication Floor</span>
+                <span>{splitLatency.polled.count} articles</span>
+              </div>
             </div>
           </div>
 

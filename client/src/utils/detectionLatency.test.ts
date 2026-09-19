@@ -15,7 +15,9 @@ import {
   calculateDetectionLatency,
   formatDurationCompact,
   formatUtcTimestamp,
-  calculateAggregateLatencyMetrics
+  calculateAggregateLatencyMetrics,
+  isPushSource,
+  calculateSplitLatencyMetrics
 } from './detectionLatency';
 
 function runAcceptanceTests() {
@@ -124,6 +126,44 @@ function runAcceptanceTests() {
   const p95Test = calculateAggregateLatencyMetrics(twentyArticles);
   assert('TEST H - Linear Interpolation P95 seconds', String(p95Test.p95Seconds), '191');
   assert('TEST H - Formatted P95', p95Test.formattedP95, '3m 11s');
+
+  // TEST I: isPushSource identification
+  assert('TEST I - Bluesky is push', String(isPushSource('Bluesky Jetstream Firehose (Realtime Stream)')), 'true');
+  assert('TEST I - Google RSS is polled', String(isPushSource('Google News RSS')), 'false');
+  assert('TEST I - Guardian is polled', String(isPushSource('The Guardian Content API')), 'false');
+
+  // TEST J: calculateDetectionLatency with push source (<= 2m target)
+  const pushUnder = calculateDetectionLatency('2026-09-19T10:00:00Z', '2026-09-19T10:01:00Z', 'Bluesky Jetstream');
+  assert('TEST J - Push within 2m badge', pushUnder.statusBadgeText, '✓ WITHIN 2m TARGET');
+  assert('TEST J - Push target text', pushUnder.targetText, '≤ 2m');
+
+  const pushOver = calculateDetectionLatency('2026-09-19T10:00:00Z', '2026-09-19T10:03:00Z', 'Bluesky Jetstream');
+  assert('TEST J - Push above 2m badge', pushOver.statusBadgeText, '⚠ ABOVE 2m TARGET');
+
+  // TEST K: calculateDetectionLatency with polled source (<= 3h target)
+  // 45 minutes on Google RSS is WITHIN 3h target (would have failed under blanket 2m rule)
+  const polledUnder = calculateDetectionLatency('2026-09-19T10:00:00Z', '2026-09-19T10:45:00Z', 'Google News RSS');
+  assert('TEST K - Polled within 3h badge', polledUnder.statusBadgeText, '✓ WITHIN 3h TARGET');
+  assert('TEST K - Polled target text', polledUnder.targetText, '≤ 3h');
+
+  // 4 hours on polled is ABOVE 3h target
+  const polledOver = calculateDetectionLatency('2026-09-19T10:00:00Z', '2026-09-19T14:00:00Z', 'Google News RSS');
+  assert('TEST K - Polled above 3h badge', polledOver.statusBadgeText, '⚠ ABOVE 3h TARGET');
+
+  // TEST L: calculateSplitLatencyMetrics splits push vs polled cleanly
+  const mixedBatch = [
+    { api_source: 'Bluesky Jetstream', published_at: '2026-09-19T10:00:00Z', ingested_at: '2026-09-19T10:00:45Z' }, // 45s (push)
+    { api_source: 'Bluesky Jetstream', published_at: '2026-09-19T10:00:00Z', ingested_at: '2026-09-19T10:01:15Z' }, // 75s (push)
+    { api_source: 'Google News RSS', published_at: '2026-09-19T10:00:00Z', ingested_at: '2026-09-19T11:00:00Z' },   // 1h (polled)
+    { api_source: 'The Guardian', published_at: '2026-09-19T10:00:00Z', ingested_at: '2026-09-19T12:30:00Z' }       // 2.5h (polled)
+  ];
+  const split = calculateSplitLatencyMetrics(mixedBatch);
+  assert('TEST L - Push count', String(split.push.count), '2');
+  assert('TEST L - Push avg', split.push.formattedAverage, '1m'); // (45 + 75)/2 = 60s = 1m
+  assert('TEST L - Push within target', String(split.push.isWithinTarget), 'true');
+  assert('TEST L - Polled count', String(split.polled.count), '2');
+  assert('TEST L - Polled avg', split.polled.formattedAverage, '1h 45m'); // (3600 + 9000)/2 = 6300s = 1h 45m
+  assert('TEST L - Polled within target', String(split.polled.isWithinTarget), 'true');
 
   const allPassed = results.every(r => r.passed);
   console.log(`\n========================================`);

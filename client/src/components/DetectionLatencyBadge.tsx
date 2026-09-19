@@ -5,6 +5,7 @@ import { calculateDetectionLatency, DetectionLatencyResult } from '../utils/dete
 interface DetectionLatencyBadgeProps {
   publishedAt?: string | null;
   detectedAt?: string | null;
+  apiSource?: string | null;
   className?: string;
   variant?: 'card' | 'inline';
 }
@@ -12,11 +13,12 @@ interface DetectionLatencyBadgeProps {
 export const DetectionLatencyBadge: React.FC<DetectionLatencyBadgeProps> = ({
   publishedAt,
   detectedAt,
+  apiSource,
   className = '',
   variant = 'card'
 }) => {
   const [showTooltip, setShowTooltip] = useState(false);
-  const latency: DetectionLatencyResult = calculateDetectionLatency(publishedAt, detectedAt);
+  const latency: DetectionLatencyResult = calculateDetectionLatency(publishedAt, detectedAt, apiSource);
 
   // Status color mappings
   let statusBadgeStyle = 'bg-slate-100 text-slate-600 border-slate-200';

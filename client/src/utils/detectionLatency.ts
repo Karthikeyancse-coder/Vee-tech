@@ -87,14 +87,31 @@ export function formatDurationCompact(totalSeconds: number): string {
 }
 
 /**
+/**
+ * Determines whether an API source is a genuine real-time push stream
+ * (e.g. Bluesky Jetstream WebSocket) or a polled/aggregated feed.
+ */
+export function isPushSource(apiSource?: string | null): boolean {
+  const s = (apiSource || '').toLowerCase();
+  return s.includes('bluesky') || s.includes('jetstream') || s.includes('firehose');
+}
+
+/**
  * Calculates the detection latency between publication and ingestion timestamps.
  * Normalizes both to UTC milliseconds before computing the difference.
+ * 
+ * Target Thresholds:
+ * - Push sources (Bluesky Jetstream): <= 120s (2m Target)
+ * - Polled / Aggregated sources: <= 10800s (3h Target, reflecting real upstream syndication floors)
  */
 export function calculateDetectionLatency(
   publishedRaw?: string | number | Date | null,
-  detectedRaw?: string | number | Date | null
+  detectedRaw?: string | number | Date | null,
+  apiSource?: string | null
 ): DetectionLatencyResult {
-  const defaultTarget = '≤ 2m';
+  const isPush = apiSource ? isPushSource(apiSource) : true;
+  const targetThresholdSec = isPush ? 120 : 3 * 3600;
+  const targetLabel = isPush ? '≤ 2m' : '≤ 3h';
 
   // Case 1 & 2: Missing or invalid timestamps
   if (!publishedRaw || !detectedRaw) {
@@ -104,7 +121,7 @@ export function calculateDetectionLatency(
       status: 'UNAVAILABLE',
       statusBadgeText: 'Unavailable',
       isAnomaly: false,
-      targetText: defaultTarget,
+      targetText: targetLabel,
       statusText: 'UNAVAILABLE'
     };
   }
@@ -122,7 +139,7 @@ export function calculateDetectionLatency(
       status: 'UNAVAILABLE',
       statusBadgeText: 'Unavailable',
       isAnomaly: false,
-      targetText: defaultTarget,
+      targetText: targetLabel,
       statusText: 'UNAVAILABLE'
     };
   }
@@ -146,7 +163,7 @@ export function calculateDetectionLatency(
       clockSkewSeconds: clockSkewSec,
       publishedUtc,
       detectedUtc,
-      targetText: defaultTarget,
+      targetText: targetLabel,
       statusText: 'TIMESTAMP ANOMALY'
     };
   }
@@ -154,17 +171,19 @@ export function calculateDetectionLatency(
   // Case 3: publishedAt == detectedAt (diffSeconds === 0)
   // or positive latency
   const formattedLatency = formatDurationCompact(diffSeconds);
-  const isWithinTarget = diffSeconds <= 120;
+  const isWithinTarget = diffSeconds <= targetThresholdSec;
+
+  const targetSuffix = isPush ? '2m' : '3h';
 
   return {
     diffSeconds,
     formattedLatency,
     status: isWithinTarget ? 'WITHIN_TARGET' : 'ABOVE_TARGET',
-    statusBadgeText: isWithinTarget ? '✓ WITHIN 2m TARGET' : '⚠ ABOVE 2m TARGET',
+    statusBadgeText: isWithinTarget ? `✓ WITHIN ${targetSuffix} TARGET` : `⚠ ABOVE ${targetSuffix} TARGET`,
     isAnomaly: false,
     publishedUtc,
     detectedUtc,
-    targetText: defaultTarget,
+    targetText: targetLabel,
     statusText: isWithinTarget ? 'WITHIN TARGET' : 'ABOVE TARGET'
   };
 }
@@ -313,3 +332,84 @@ export function calculateAggregateLatencyMetrics(
     scopeLabel
   };
 }
+
+export interface SplitSourceLatencyMetric extends AggregateLatencyResult {
+  targetText: string;
+  targetSeconds: number;
+  isWithinTarget: boolean;
+  sourceType: 'push' | 'polled';
+}
+
+export interface SplitLatencyMetrics {
+  push: SplitSourceLatencyMetric;
+  polled: SplitSourceLatencyMetric;
+  blended: AggregateLatencyResult;
+  totalArticles: number;
+}
+
+/**
+ * Calculates detection latency metrics SEPARATELY for Push (WebSocket / Bluesky Jetstream)
+ * vs Polled/Aggregated sources (Google RSS, News APIs, Wires).
+ * Never blends them into one misleading KPI figure.
+ */
+export function calculateSplitLatencyMetrics(
+  articles: Array<{
+    api_source?: string;
+    apiSource?: string;
+    source_name?: string;
+    published_at?: string;
+    publishedAt?: string;
+    ingested_at?: string;
+    detected_at?: string;
+    detectedAt?: string;
+    sla?: { publishedAt?: string };
+  }>,
+  options: AggregateLatencyOptions = {}
+): SplitLatencyMetrics {
+  const pushArticles: typeof articles = [];
+  const polledArticles: typeof articles = [];
+
+  for (const a of articles) {
+    const src = a.api_source || a.apiSource || '';
+    if (isPushSource(src)) {
+      pushArticles.push(a);
+    } else {
+      polledArticles.push(a);
+    }
+  }
+
+  const pushMetrics = calculateAggregateLatencyMetrics(pushArticles, {
+    ...options,
+    scopeLabel: 'Push Stream (Real-Time)'
+  });
+
+  const polledMetrics = calculateAggregateLatencyMetrics(polledArticles, {
+    ...options,
+    scopeLabel: 'Polled / Aggregated Wires'
+  });
+
+  const blended = calculateAggregateLatencyMetrics(articles, options);
+
+  const pushTargetSec = 120; // 2 minutes
+  const polledTargetSec = 3 * 3600; // 3 hours
+
+  return {
+    push: {
+      ...pushMetrics,
+      targetText: '≤ 2m',
+      targetSeconds: pushTargetSec,
+      isWithinTarget: pushMetrics.averageSeconds !== null ? pushMetrics.averageSeconds <= pushTargetSec : true,
+      sourceType: 'push'
+    },
+    polled: {
+      ...polledMetrics,
+      targetText: '≤ 3h',
+      targetSeconds: polledTargetSec,
+      isWithinTarget: polledMetrics.averageSeconds !== null ? polledMetrics.averageSeconds <= polledTargetSec : true,
+      sourceType: 'polled'
+    },
+    blended,
+    totalArticles: articles.length
+  };
+}
+

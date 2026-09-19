@@ -107,6 +107,7 @@ export const ArticleModal: React.FC<ArticleModalProps> = ({
             <DetectionLatencyBadge
               publishedAt={article.published_at}
               detectedAt={article.ingested_at}
+              apiSource={article.api_source}
             />
           </div>
         </div>
