@@ -132,7 +132,17 @@ export const IntelligenceTrendAnalysisView: React.FC<IntelligenceTrendAnalysisVi
       }
 
       if (sourceFilter !== 'All') {
-        if (a.source_name !== sourceFilter) return false;
+        const apiSrc = (a.api_source || '').toLowerCase();
+        if (sourceFilter === 'Google News RSS') {
+          if (!apiSrc.includes('google') && !apiSrc.includes('rss')) return false;
+          if (apiSrc.includes('publisher') || apiSrc.includes('et') || apiSrc.includes('institutional')) return false;
+        } else if (sourceFilter === 'GDELT DOC') {
+          if (!apiSrc.includes('gdelt')) return false;
+        } else if (sourceFilter === 'Institutional') {
+          if (!apiSrc.includes('institutional') && !apiSrc.includes('et') && !apiSrc.includes('publisher')) return false;
+        } else if (sourceFilter === 'NewsAPI') {
+          if (!apiSrc.includes('newsapi')) return false;
+        }
       }
 
       if (riskFilter !== 'All') {
@@ -1004,22 +1014,17 @@ export const IntelligenceTrendAnalysisView: React.FC<IntelligenceTrendAnalysisVi
           </div>
 
           {/* Source Dropdown */}
-          <div className="relative">
-            <select
-              value={sourceFilter}
-              onChange={(e) => setSourceFilter(e.target.value)}
-              aria-label="Filter by Source"
-              className="appearance-none bg-slate-50 border border-slate-200 rounded-xl px-3 py-1.5 pr-7 text-xs font-semibold text-slate-700 hover:bg-slate-100 transition-colors cursor-pointer focus:outline-none"
-            >
-              <option value="All">Source: All</option>
-              {availableSources.map((src) => (
-                <option key={src} value={src}>
-                  {src}
-                </option>
-              ))}
-            </select>
-            <ChevronDown className="w-3 h-3 text-slate-400 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
-          </div>
+          <select
+            value={sourceFilter}
+            onChange={(e) => setSourceFilter(e.target.value)}
+            className="bg-slate-50 border border-slate-200 text-slate-700 text-sm rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-rose-500 transition-all"
+          >
+            <option value="All">Source: All</option>
+            <option value="Google News RSS">Google News RSS</option>
+            <option value="GDELT DOC">GDELT DOC 2.0 (Global Discovery)</option>
+            <option value="Institutional">Institutional Publisher Wires (ET, Mint, BS)</option>
+            <option value="NewsAPI">NewsAPI (Global Aggregator)</option>
+          </select>
 
           {/* Risk Level Dropdown */}
           <div className="relative">

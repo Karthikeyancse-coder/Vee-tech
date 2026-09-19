@@ -130,7 +130,7 @@ export const CrisisWarRoomView: React.FC<CrisisWarRoomViewProps> = ({
   const [searchFilter, setSearchFilter] = useState('');
   const [severityFilter, setSeverityFilter] = useState('ALL');
   const [targetFilter, setTargetFilter] = useState('ALL');
-  const [sourceFilter, setSourceFilter] = useState('ALL');
+  const [sourceFilter, setSourceFilter] = useState('All');
   const [timeFilter, setTimeFilter] = useState('All');
   const [sortOrder, setSortOrder] = useState<'newest' | 'oldest'>('newest');
 
@@ -183,7 +183,7 @@ export const CrisisWarRoomView: React.FC<CrisisWarRoomViewProps> = ({
     setSearchFilter('');
     setSeverityFilter('ALL');
     setTargetFilter('ALL');
-    setSourceFilter('ALL');
+    setSourceFilter('All');
     setTimeFilter('All');
     setSortOrder('newest');
   };
@@ -230,8 +230,20 @@ export const CrisisWarRoomView: React.FC<CrisisWarRoomViewProps> = ({
         // Secondary target
         if (targetFilter !== 'ALL' && article.entity_mentioned !== targetFilter) return false;
 
-        // Secondary source
-        if (sourceFilter !== 'ALL' && article.source_name !== sourceFilter) return false;
+        // Secondary source (strictly filters by high-level ingestion engine / api_source)
+        if (sourceFilter !== 'All' && sourceFilter !== 'ALL') {
+          const apiSrc = (article.api_source || '').toLowerCase();
+          if (sourceFilter === 'Google News RSS') {
+            if (!apiSrc.includes('google') && !apiSrc.includes('rss')) return false;
+            if (apiSrc.includes('publisher') || apiSrc.includes('et') || apiSrc.includes('institutional')) return false;
+          } else if (sourceFilter === 'GDELT DOC') {
+            if (!apiSrc.includes('gdelt')) return false;
+          } else if (sourceFilter === 'Institutional') {
+            if (!apiSrc.includes('institutional') && !apiSrc.includes('et') && !apiSrc.includes('publisher')) return false;
+          } else if (sourceFilter === 'NewsAPI') {
+            if (!apiSrc.includes('newsapi')) return false;
+          }
+        }
 
         // Secondary time filter
         const now = Date.now();
@@ -403,14 +415,13 @@ export const CrisisWarRoomView: React.FC<CrisisWarRoomViewProps> = ({
         <select
           value={sourceFilter}
           onChange={(e) => setSourceFilter(e.target.value)}
-          className="h-8 px-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700 font-medium focus:outline-none cursor-pointer max-w-[170px]"
+          className="bg-slate-50 border border-slate-200 text-slate-700 text-sm rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-rose-500 transition-all"
         >
-          <option value="ALL">Source: All</option>
-          {availableSources.map((src) => (
-            <option key={src} value={src}>
-              {src}
-            </option>
-          ))}
+          <option value="All">Source: All</option>
+          <option value="Google News RSS">Google News RSS</option>
+          <option value="GDELT DOC">GDELT DOC 2.0 (Global Discovery)</option>
+          <option value="Institutional">Institutional Publisher Wires (ET, Mint, BS)</option>
+          <option value="NewsAPI">NewsAPI (Global Aggregator)</option>
         </select>
 
         {/* Time dropdown */}
