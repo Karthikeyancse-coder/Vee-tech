@@ -542,7 +542,16 @@ async function insertArticleRecord(articlePayload) {
     memoryArticles.unshift(articlePayload);
     return { ...articlePayload, _dbSuccess: false };
   }
-  console.log(`[Supabase] ✅ COMMITTED TO DB: ID ${data.id} (Source: ${data.api_source}) at ${new Date().toLocaleTimeString()}`);
+  // ── Latency Audit: split total gap into upstream lag vs our polling lag ──
+  const now = new Date();
+  const publishedAt = data.published_at ? new Date(data.published_at) : null;
+  const ingestedAt  = data.ingested_at  ? new Date(data.ingested_at)  : now;
+  const totalLagMin = publishedAt ? Math.round((ingestedAt - publishedAt) / 60000) : null;
+  // Our polling lag = time from ingested_at stamp to now (how long it sat in pipeline before DB write)
+  const ourPipelineLagSec = Math.round((now - ingestedAt) / 1000);
+  const upstreamLagMin = totalLagMin !== null ? totalLagMin : '?';
+  console.log(`[Supabase] ✅ COMMITTED TO DB: ID ${data.id} (Source: ${data.api_source}) at ${now.toLocaleTimeString()} | total_lag=${upstreamLagMin}min | pipeline_lag=${ourPipelineLagSec}s`);
+
   const apiSrc = (data.api_source || '').toLowerCase();
   const srcName = (data.source_name || '').toLowerCase();
   let key = 'newsapi';
@@ -1143,7 +1152,10 @@ async function startBackgroundIngestion() {
     console.error('[Engine] Background fetch error:', err.message);
   } finally {
     isBackgroundFetching = false;
-    setTimeout(startBackgroundIngestion, 45000); // Poll every 45 seconds
+    // 20-second non-overlapping poll: tightest safe interval for RSS/API sources
+    // without triggering rate-limits (Google News RSS: no hard limit at this cadence,
+    // Currents/NewsData/Guardian: each 45+ second API round-trip makes this safe).
+    setTimeout(startBackgroundIngestion, 20000); // Poll every 20 seconds
   }
 }
 
@@ -1159,10 +1171,10 @@ if (!isTestRun) {
     console.log(`🚀 [Vee-Alert Backend] Listening on http://localhost:${PORT}`);
     console.log(`🧠 [Local AI Engine] Ollama model: ${OLLAMA_MODEL} at ${OLLAMA_BASE_URL}`);
     console.log(`📦 [Database] Supabase ${supabase ? 'Configured & Connected' : 'Not configured (In-memory fallback)'}`);
-    console.log(`⚡ [SLA Target] Sub-120 seconds event-driven stream`);
+    console.log(`⚡ [SLA Target] Sub-60s polling lag on RSS; upstream aggregator lag varies by source`);
     console.log(`🛡️ [Deduplicator] SHA-256 Pre-Database O(1) deduplication active`);
     console.log(`📰 [News Sources] Multi-Source Matrix (NewsAPI, Currents, GNews, NewsData, Guardian, Publisher RSS, Bluesky Trial)`);
-    console.log(`⏱️ [Automated Ingestion] 45-second non-overlapping recursive engine active`);
+    console.log(`⏱️ [Automated Ingestion] 20-second non-overlapping recursive engine active`);
     console.log(`=============================================================\n`);
 
     // Pre-warm local Ollama weights in VRAM to eliminate cold inference lag

@@ -589,10 +589,34 @@ export const CrisisWarRoomView: React.FC<CrisisWarRoomViewProps> = ({
                             {article.source_name || 'News Wire'}
                           </span>
 
-                          {/* API Source Tag */}
-                          <span className="px-1.5 py-0.2 rounded bg-slate-100 text-slate-500 text-[9px] uppercase font-bold tracking-wider border border-slate-200">
-                            VIA {article.api_source?.toUpperCase() || 'GOOGLE RSS'}
-                          </span>
+                          {/* API Source Tag + Aggregated vs Direct-Wire indicator */}
+                          {(() => {
+                            const src = (article.api_source || '').toLowerCase();
+                            const isAggregator = src.includes('rss') || src.includes('google') || src.includes('newsdata') || src.includes('gnews');
+                            return (
+                              <>
+                                <span className="px-1.5 py-0.2 rounded bg-slate-100 text-slate-500 text-[9px] uppercase font-bold tracking-wider border border-slate-200">
+                                  VIA {article.api_source?.toUpperCase() || 'GOOGLE RSS'}
+                                </span>
+                                {isAggregator && (
+                                  <span
+                                    title="Aggregated source — publisher → aggregator → us. Upstream lag of 5–60min is normal and outside our control."
+                                    className="px-1.5 py-0.2 rounded bg-amber-50 text-amber-600 text-[9px] uppercase font-bold tracking-wider border border-amber-200 cursor-help"
+                                  >
+                                    AGGREGATED
+                                  </span>
+                                )}
+                                {!isAggregator && (
+                                  <span
+                                    title="Direct-wire API — lowest upstream lag, typically &lt;5 min from publication."
+                                    className="px-1.5 py-0.2 rounded bg-emerald-50 text-emerald-700 text-[9px] uppercase font-bold tracking-wider border border-emerald-200 cursor-help"
+                                  >
+                                    DIRECT WIRE
+                                  </span>
+                                )}
+                              </>
+                            );
+                          })()}
 
                           <span className="text-slate-300">•</span>
                           <span className="flex items-center gap-1 text-emerald-700 font-medium">
