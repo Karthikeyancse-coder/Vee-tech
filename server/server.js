@@ -543,6 +543,21 @@ async function insertArticleRecord(articlePayload) {
     return { ...articlePayload, _dbSuccess: false };
   }
   console.log(`[Supabase] ✅ COMMITTED TO DB: ID ${data.id} (Source: ${data.api_source}) at ${new Date().toLocaleTimeString()}`);
+  const apiSrc = (data.api_source || '').toLowerCase();
+  const srcName = (data.source_name || '').toLowerCase();
+  let key = 'newsapi';
+  if (apiSrc.includes('currents') || srcName.includes('currents')) key = 'currents';
+  else if (apiSrc.includes('bluesky') || srcName.includes('bsky')) key = 'bluesky';
+  else if (apiSrc.includes('gnews') || srcName.includes('gnews')) key = 'gnews';
+  else if (apiSrc.includes('newsdata') || srcName.includes('newsdata')) key = 'newsdata';
+  else if (apiSrc.includes('gdelt') || srcName.includes('gdelt')) key = 'gdelt';
+  else if (apiSrc.includes('guardian') || srcName.includes('guardian')) key = 'guardian';
+  else if (apiSrc.includes('institutional') || apiSrc.includes('et rss') || srcName.includes('economic') || srcName.includes('mint') || srcName.includes('standard') || srcName.includes('reuters') || srcName.includes('bloomberg')) key = 'institutional';
+  else if (apiSrc.includes('google') || srcName.includes('google') || apiSrc.includes('rss')) key = 'googlenews';
+
+  if (sourceTelemetry[key]) {
+    sourceTelemetry[key].lastNewArticle = data.ingested_at || new Date().toISOString();
+  }
   return { ...data, _dbSuccess: true };
 }
 
@@ -1102,8 +1117,8 @@ async function initSourceTelemetryFromDb() {
         else if (apiSrc.includes('newsdata') || srcName.includes('newsdata')) key = 'newsdata';
         else if (apiSrc.includes('gdelt') || srcName.includes('gdelt')) key = 'gdelt';
         else if (apiSrc.includes('guardian') || srcName.includes('guardian')) key = 'guardian';
-        else if (apiSrc.includes('rss') || srcName.includes('google')) key = 'googlenews';
-        else if (srcName.includes('economic') || srcName.includes('mint') || srcName.includes('standard') || srcName.includes('reuters') || srcName.includes('bloomberg')) key = 'institutional';
+        else if (apiSrc.includes('institutional') || apiSrc.includes('et rss') || srcName.includes('economic') || srcName.includes('mint') || srcName.includes('standard') || srcName.includes('reuters') || srcName.includes('bloomberg')) key = 'institutional';
+        else if (apiSrc.includes('google') || srcName.includes('google') || apiSrc.includes('rss')) key = 'googlenews';
 
         if (sourceTelemetry[key] && !sourceTelemetry[key].lastNewArticle) {
           sourceTelemetry[key].lastNewArticle = art.ingested_at || art.published_at;

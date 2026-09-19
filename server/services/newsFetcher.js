@@ -423,13 +423,23 @@ function buildGoogleRssUrl() {
 const WHITELISTED_RSS_FEEDS = [
   {
     name: 'The Economic Times',
-    api_source: 'ET RSS',
+    api_source: 'Institutional RSS',
     url: 'https://economictimes.indiatimes.com/tech/ites/rssfeeds/13357555.cms'
   },
   {
     name: 'The Economic Times Top Stories',
-    api_source: 'ET RSS',
+    api_source: 'Institutional RSS',
     url: 'https://economictimes.indiatimes.com/rssfeedstopstories.cms'
+  },
+  {
+    name: 'Livemint Companies',
+    api_source: 'Institutional RSS',
+    url: 'https://www.livemint.com/rss/companies'
+  },
+  {
+    name: 'Business Standard Companies',
+    api_source: 'Institutional RSS',
+    url: 'https://www.business-standard.com/rss/companies-101.rss'
   },
   {
     name: 'Google News Live RSS',

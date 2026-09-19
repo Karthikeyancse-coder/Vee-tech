@@ -315,9 +315,9 @@ export const IntelligenceSourcesView: React.FC<IntelligenceSourcesViewProps> = (
         matchedKey = 'gdelt';
       } else if (apiSrc.includes('guardian') || srcName.includes('guardian')) {
         matchedKey = 'guardian';
-      } else if (apiSrc.includes('rss') || srcName.includes('google')) {
-        matchedKey = 'googlenews';
       } else if (
+        apiSrc.includes('institutional') ||
+        apiSrc.includes('et rss') ||
         srcName.includes('economic') ||
         srcName.includes('mint') ||
         srcName.includes('standard') ||
@@ -325,6 +325,8 @@ export const IntelligenceSourcesView: React.FC<IntelligenceSourcesViewProps> = (
         srcName.includes('bloomberg')
       ) {
         matchedKey = 'institutional';
+      } else if (apiSrc.includes('google') || srcName.includes('google') || apiSrc.includes('rss')) {
+        matchedKey = 'googlenews';
       } else {
         matchedKey = 'newsapi';
       }
