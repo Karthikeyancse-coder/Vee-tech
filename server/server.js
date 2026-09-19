@@ -4,7 +4,13 @@ import dotenv from 'dotenv';
 import axios from 'axios';
 import { randomUUID } from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
-import { sendTelegramAlert, triggerVoiceCall } from './services/notifier.js';
+import {
+  sendSlackAlert,
+  sendWhatsAppAlert,
+  sendEmailAlert,
+  triggerVoiceCall,
+  sendTelegramAlert
+} from './services/notifier.js';
 import {
   fetchMultiSourceNews,
   fetchLiveGoogleNews,
@@ -62,8 +68,88 @@ const memoryAlertLogs = [];
  * }>}
  */
 // ============================================================================
-// 2. CLIENT-ONLY RISK TAXONOMY & NORMALIZATION CLAMP
+// 2. CONFIGURABLE ALERT RULES ENGINE
 // ============================================================================
+export const ALERT_RULES = [
+  {
+    name: 'Critical Existential Crisis',
+    entity: 'Infosys',
+    minRiskScore: 8.5,
+    riskLevel: 'Critical',
+    channels: ['Slack', 'WhatsApp', 'Voice'],
+    voiceEscalation: true
+  },
+  {
+    name: 'High Risk Regulatory or Outage',
+    entity: 'Infosys',
+    minRiskScore: 6.5,
+    riskLevel: 'High',
+    channels: ['Slack', 'WhatsApp'],
+    voiceEscalation: false
+  },
+  {
+    name: 'Competitor Strategic Movement',
+    entity: 'Competitors',
+    minRiskScore: 6.0,
+    riskLevel: 'High',
+    channels: ['Slack'],
+    voiceEscalation: false
+  },
+  {
+    name: 'Operational Intelligence Watch',
+    entity: 'All',
+    minRiskScore: 4.0,
+    riskLevel: 'Medium',
+    channels: ['Email'],
+    voiceEscalation: false
+  }
+];
+
+export function evaluateAlertRules(triage) {
+  const channels = new Set();
+  let requiresVoice = false;
+  const entityNorm = String(triage.entity || '').toLowerCase();
+  const isClient = entityNorm === 'infosys';
+
+  for (const rule of ALERT_RULES) {
+    const entityMatch =
+      rule.entity === 'All' ||
+      (rule.entity === 'Infosys' && isClient) ||
+      (rule.entity === 'Competitors' && !isClient);
+
+    if (entityMatch && triage.risk_score >= rule.minRiskScore) {
+      rule.channels.forEach((c) => channels.add(c));
+      if (rule.voiceEscalation && isClient) requiresVoice = true;
+    }
+  }
+
+  return {
+    channels: Array.from(channels),
+    requiresVoice: requiresVoice || (isClient && triage.risk_level === 'Critical')
+  };
+}
+
+/**
+ * Startup warm-up ping for local Ollama model to ensure weights are pre-loaded in VRAM
+ */
+export async function warmupOllama() {
+  console.log(`[Ollama] 🔄 Sending warm-up ping to model ${OLLAMA_MODEL}...`);
+  try {
+    const start = Date.now();
+    await axios.post(`${OLLAMA_BASE_URL}/api/generate`, {
+      model: OLLAMA_MODEL,
+      prompt: 'ping',
+      stream: false,
+      options: { num_predict: 5 }
+    }, { timeout: 35000 });
+    console.log(`[Ollama] ✅ Model ${OLLAMA_MODEL} warmed up and ready in VRAM (${Date.now() - start}ms).`);
+    return true;
+  } catch (err) {
+    console.warn(`[Ollama] ⚠️ Warm-up notice (${err.message}). Model will initialize on first inference.`);
+    return false;
+  }
+}
+
 /**
  * Hardcode a programmatic safeguard following triage:
  * Only primary client "Infosys" can ever receive Critical risk or voice escalation.
@@ -134,9 +220,10 @@ export async function triageArticle(rawContent, title = '', sourceName = '') {
     `Content: ${rawContent}`
   ].join('\n');
 
+  const tStart = Date.now();
   try {
     const controller = new AbortController();
-    const ollamaTimeout = setTimeout(() => controller.abort(), 12000); // 12-second hard abort
+    const ollamaTimeout = setTimeout(() => controller.abort(), 45000); // 45-second SLA timeout
 
     const response = await axios.post(`${OLLAMA_BASE_URL}/api/generate`, {
       model: OLLAMA_MODEL,
@@ -145,10 +232,10 @@ export async function triageArticle(rawContent, title = '', sourceName = '') {
       format: 'json',
       options: {
         temperature: 0.1,
-        num_predict: 512
+        num_predict: 400
       }
     }, {
-      timeout: 14000,
+      timeout: 45000,
       signal: controller.signal
     });
 
@@ -186,11 +273,14 @@ export async function triageArticle(rawContent, title = '', sourceName = '') {
         ]
       };
 
-      // Hardcode programmatic normalization clamp
-      return normalizeTriage(rawTriage);
+      const normalized = normalizeTriage(rawTriage);
+      const latencyMs = Date.now() - tStart;
+      console.log(`[Ollama Triage] ✅ Successfully triaged via model=ollama:${OLLAMA_MODEL} for "${(title || rawContent).slice(0, 45)}..." (Latency: ${latencyMs}ms)`);
+      return normalized;
     }
   } catch (error) {
-    console.warn(`[Ollama Triage] Inference failed or timed out (${error.message}). Falling back to deterministic triage.`);
+    const latencyMs = Date.now() - tStart;
+    console.warn(`[Ollama Triage] ❌ Inference failed after ${latencyMs}ms (${error.code || error.message}). Status: ${error.response?.status || 'N/A'}. Triggering deterministic fallback.`);
   }
 
   // Deterministic Local Fallback Triage
@@ -402,14 +492,20 @@ export async function processIngest(payload) {
 
   console.log(`[Pipeline] >>> NEW ARTICLE DISCOVERED: "${effectiveTitle.slice(0, 55)}..." [${api_source}] → Sending to AI Triage...`);
 
+  // Correlation ID tracking across all stages
+  const correlation_id = payload?.correlation_id || `corr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
+
   // TRIAGE: Await local AI triage and apply programmatic normalization clamp
   const rawTriage = await triageArticle(raw_content, effectiveTitle, source_name);
   const triage = normalizeTriage(rawTriage);
 
-
   // TRIAGE TIMING: Capture triaged_at
   const triaged_at = Date.now();
   const triagedIso = new Date(triaged_at).toISOString();
+
+  // BRIEFING TIMING: Capture briefed_at (completion of 5-point executive brief)
+  const briefed_at = Date.now();
+  const briefedIso = new Date(briefed_at).toISOString();
 
   const articleId = randomUUID();
   const articlePayload = {
@@ -434,12 +530,20 @@ export async function processIngest(payload) {
   // PARALLEL FORK A: Insert into Supabase articles table
   const dbForkPromise = insertArticleRecord(articlePayload);
 
-  // PARALLEL FORK B: Evaluate and dispatch alerts
+  // PARALLEL FORK B: Evaluate rules and dispatch across multi-channels
+  const { channels, requiresVoice } = evaluateAlertRules(triage);
   const alertDispatches = [];
-  if (triage.risk_level === 'High') {
-    alertDispatches.push(sendTelegramAlert(triage.five_bullet_summary, triage.risk_level, effectiveTitle));
-  } else if (triage.risk_level === 'Critical') {
-    alertDispatches.push(sendTelegramAlert(triage.five_bullet_summary, triage.risk_level, effectiveTitle));
+
+  if (channels.includes('Slack')) {
+    alertDispatches.push(sendSlackAlert(triage.five_bullet_summary, triage.risk_level, effectiveTitle, triage.risk_score));
+  }
+  if (channels.includes('WhatsApp')) {
+    alertDispatches.push(sendWhatsAppAlert(triage.five_bullet_summary, effectiveTitle, triage.risk_score));
+  }
+  if (channels.includes('Email')) {
+    alertDispatches.push(sendEmailAlert(triage.five_bullet_summary, effectiveTitle, triage.risk_score));
+  }
+  if (requiresVoice || triage.requires_voice_escalation) {
     alertDispatches.push(triggerVoiceCall(triage.five_bullet_summary, effectiveTitle));
   }
 
@@ -449,7 +553,7 @@ export async function processIngest(payload) {
     Promise.all(alertDispatches)
   ]);
 
-  // DISPATCH TIMING: Capture dispatched_at
+  // DISPATCH TIMING: Capture alerted_at / dispatched_at
   const dispatched_at = Date.now();
   const dispatchedIso = new Date(dispatched_at).toISOString();
 
@@ -463,7 +567,12 @@ export async function processIngest(payload) {
         if (error) console.warn('[Supabase] dispatched_at update notice:', error.message);
       });
   }
+
+  // Attach runtime pipeline telemetry & timestamps
   if (insertedArticle) {
+    insertedArticle.correlation_id = correlation_id;
+    insertedArticle.briefed_at = briefedIso;
+    insertedArticle.alerted_at = dispatchedIso;
     insertedArticle.dispatched_at = dispatchedIso;
   }
 
@@ -474,10 +583,10 @@ export async function processIngest(payload) {
   const latency_ms = dispatched_at - ingested_at;
 
   if (insertedArticle._dbSuccess === true) {
-    const alertChannel = triage.risk_level === 'Critical' ? 'Voice' : (triage.risk_level === 'High' ? 'Telegram' : 'Email');
+    const primaryChannel = requiresVoice ? 'Voice' : (channels.includes('Slack') ? 'Slack' : (channels[0] || 'Slack'));
     await insertAlertLogRecord({
       article_id: insertedArticle.id,
-      channel: alertChannel,
+      channel: primaryChannel,
       dispatched_at: dispatchedIso,
       sla_seconds: sla_seconds,
       sla_breached: sla_breached
@@ -492,12 +601,17 @@ export async function processIngest(payload) {
     triage,
     latency_ms,
     sla: {
+      correlation_id,
+      published_at: articlePayload.published_at,
       ingested_at: ingestedIso,
       triaged_at: triagedIso,
+      briefed_at: briefedIso,
+      alerted_at: dispatchedIso,
       dispatched_at: dispatchedIso,
       sla_seconds,
       sla_breached,
-      sla_target_seconds: 120
+      sla_target_seconds: 120,
+      dispatched_channels: channels
     }
   };
 }
@@ -641,19 +755,29 @@ async function startBackgroundIngestion() {
   }
 }
 
-app.listen(PORT, () => {
-  console.log(`\n=============================================================`);
-  console.log(`🚀 [Vee-Alert Backend] Listening on http://localhost:${PORT}`);
-  console.log(`🧠 [Local AI Engine] Ollama model: ${OLLAMA_MODEL} at ${OLLAMA_BASE_URL}`);
-  console.log(`📦 [Database] Supabase ${supabase ? 'Configured & Connected' : 'Not configured (In-memory fallback)'}`);
-  console.log(`⚡ [SLA Target] Sub-120 seconds event-driven stream`);
-  console.log(`🛡️ [Deduplicator] URL & Title deduplication active`);
-  console.log(`📰 [News Sources] NewsAPI, GDELT DOC, The Guardian, and Verified Wire RSS`);
-  console.log(`⏱️ [Automated Ingestion] 60-second non-overlapping recursive engine active`);
-  console.log(`=============================================================\n`);
+const isDirectRun = Boolean(process.argv[1] && (
+  process.argv[1].endsWith('server.js') ||
+  process.argv[1].endsWith('server')
+));
 
-  // Start the automated continuous ingestion engine on server boot
-  startBackgroundIngestion();
-});
+if (isDirectRun && process.env.NODE_ENV !== 'test') {
+  app.listen(PORT, async () => {
+    console.log(`\n=============================================================`);
+    console.log(`🚀 [Vee-Alert Backend] Listening on http://localhost:${PORT}`);
+    console.log(`🧠 [Local AI Engine] Ollama model: ${OLLAMA_MODEL} at ${OLLAMA_BASE_URL}`);
+    console.log(`📦 [Database] Supabase ${supabase ? 'Configured & Connected' : 'Not configured (In-memory fallback)'}`);
+    console.log(`⚡ [SLA Target] Sub-120 seconds event-driven stream`);
+    console.log(`🛡️ [Deduplicator] URL & Title deduplication active`);
+    console.log(`📰 [News Sources] NewsAPI, GDELT DOC, The Guardian, and Verified Wire RSS`);
+    console.log(`⏱️ [Automated Ingestion] 60-second non-overlapping recursive engine active`);
+    console.log(`=============================================================\n`);
+
+    // Pre-warm local Ollama weights in VRAM to eliminate cold inference lag
+    await warmupOllama();
+
+    // Start the automated continuous ingestion engine on server boot
+    startBackgroundIngestion();
+  });
+}
 
 export default app;

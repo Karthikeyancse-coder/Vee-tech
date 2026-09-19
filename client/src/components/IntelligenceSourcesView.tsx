@@ -88,14 +88,14 @@ export const IntelligenceSourcesView: React.FC<IntelligenceSourcesViewProps> = (
       {
         id: 'guardian',
         name: 'The Guardian Content API',
-        description: 'Official Guardian Media API for news, opinion and feature content.',
+        description: 'Official Guardian Media API (Not configured — coming soon).',
         type: 'REST API',
         category: 'Publisher',
         intervalSec: 60,
-        tags: ['REST API', 'News', 'UK', 'Media'],
+        tags: ['REST API', 'News', 'UK', 'Not Configured'],
         icon: Newspaper,
-        iconTheme: 'bg-emerald-50 text-emerald-600 border-emerald-100',
-        status: 'Operational',
+        iconTheme: 'bg-slate-100 text-slate-400 border-slate-200',
+        status: 'Disabled',
         provider: 'The Guardian OpenPlatform',
         apiSourceMatch: ['guardian', 'the guardian', 'the guardian content api']
       },
@@ -557,10 +557,16 @@ export const IntelligenceSourcesView: React.FC<IntelligenceSourcesViewProps> = (
 
             const recordVolume = stats.count > 0 ? stats.count : source.id === 'newsapi' ? 1248 : source.id === 'gdelt' ? 856 : source.id === 'guardian' ? 412 : source.id === 'googlenews' ? 320 : 678;
 
+            const isInactive = source.status === 'Disabled' || source.id === 'guardian';
+
             return (
               <div
                 key={source.id}
-                className="bg-white border border-slate-200 rounded-2xl p-4 sm:p-5 shadow-2xs hover:border-slate-300 hover:shadow-xs transition-all flex flex-col lg:flex-row lg:items-center justify-between gap-4 relative"
+                className={`border rounded-2xl p-4 sm:p-5 shadow-2xs transition-all flex flex-col lg:flex-row lg:items-center justify-between gap-4 relative ${
+                  isInactive
+                    ? 'bg-slate-50/60 border-slate-200/80 opacity-75'
+                    : 'bg-white border-slate-200 hover:border-slate-300 hover:shadow-xs'
+                }`}
               >
                 {/* LEFT SECTION: IDENTITY & TAGS */}
                 <div className="flex items-start gap-4 min-w-0 lg:w-[36%]">
@@ -582,7 +588,11 @@ export const IntelligenceSourcesView: React.FC<IntelligenceSourcesViewProps> = (
                       {source.tags.map((t) => (
                         <span
                           key={t}
-                          className="px-2 py-0.5 rounded-md bg-blue-50/70 border border-blue-100 text-[10px] font-semibold text-blue-700 font-mono"
+                          className={`px-2 py-0.5 rounded-md border text-[10px] font-semibold font-mono ${
+                            isInactive
+                              ? 'bg-slate-100 border-slate-200 text-slate-500'
+                              : 'bg-blue-50/70 border-blue-100 text-blue-700'
+                          }`}
                         >
                           {t}
                         </span>
@@ -595,10 +605,17 @@ export const IntelligenceSourcesView: React.FC<IntelligenceSourcesViewProps> = (
                 <div className="flex flex-wrap items-center justify-between sm:justify-start lg:justify-between gap-4 lg:gap-6 flex-1 border-t lg:border-t-0 pt-3 lg:pt-0 border-slate-100">
                   {/* Status Badge */}
                   <div className="flex items-center gap-1.5">
-                    <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1.5">
-                      <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                      {source.status}
-                    </span>
+                    {isInactive ? (
+                      <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-slate-100 text-slate-600 border border-slate-200 flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+                        Not Configured
+                      </span>
+                    ) : (
+                      <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200 flex items-center gap-1.5">
+                        <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+                        {source.status}
+                      </span>
+                    )}
                   </div>
 
                   {/* Polling Interval */}

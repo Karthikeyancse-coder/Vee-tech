@@ -8,6 +8,7 @@ import { SlaProofEngineView } from './components/SlaProofEngineView';
 import { IntelligenceTrendAnalysisView } from './components/IntelligenceTrendAnalysisView';
 import { IntelligenceSourcesView } from './components/IntelligenceSourcesView';
 import { Article } from './hooks/useWarRoom';
+import { WarRoomProvider } from './context/WarRoomContext';
 import {
   TrendingUp,
   FileText,
@@ -212,64 +213,66 @@ export default function App() {
   const [selectedArticle, setSelectedArticle] = useState<Article | null>(null);
 
   return (
-    <BrowserRouter>
-      <Routes>
-        <Route
-          element={
-            <AppShell
-              searchQuery={searchQuery}
-              setSearchQuery={setSearchQuery}
-              selectedArticle={selectedArticle}
-              setSelectedArticle={setSelectedArticle}
-              activeVoiceCallArticle={activeVoiceCallArticle}
-              setActiveVoiceCallArticle={setActiveVoiceCallArticle}
-            />
-          }
-        >
-          {/* 1. Dashboard */}
-          <Route path="/" element={<DashboardRoute />} />
-          <Route path="/dashboard" element={<DashboardRoute />} />
+    <WarRoomProvider>
+      <BrowserRouter>
+        <Routes>
+          <Route
+            element={
+              <AppShell
+                searchQuery={searchQuery}
+                setSearchQuery={setSearchQuery}
+                selectedArticle={selectedArticle}
+                setSelectedArticle={setSelectedArticle}
+                activeVoiceCallArticle={activeVoiceCallArticle}
+                setActiveVoiceCallArticle={setActiveVoiceCallArticle}
+              />
+            }
+          >
+            {/* 1. Dashboard */}
+            <Route path="/" element={<DashboardRoute />} />
+            <Route path="/dashboard" element={<DashboardRoute />} />
 
-          {/* 2. Crisis War Room */}
-          <Route path="/crisis-war-room" element={<CrisisWarRoomRoute />} />
-          <Route path="/dashboard/crisis-war-room" element={<CrisisWarRoomRoute />} />
+            {/* 2. Crisis War Room */}
+            <Route path="/crisis-war-room" element={<CrisisWarRoomRoute />} />
+            <Route path="/dashboard/crisis-war-room" element={<CrisisWarRoomRoute />} />
 
-          {/* 3. Competitor Radar */}
-          <Route path="/competitor-radar" element={<CompetitorRadarRoute />} />
-          <Route path="/dashboard/competitor-radar" element={<CompetitorRadarRoute />} />
+            {/* 3. Competitor Radar */}
+            <Route path="/competitor-radar" element={<CompetitorRadarRoute />} />
+            <Route path="/dashboard/competitor-radar" element={<CompetitorRadarRoute />} />
 
-          {/* 4. SLA Proof Engine */}
-          <Route path="/sla-proof-engine" element={<SlaProofEngineRoute />} />
-          <Route path="/dashboard/sla-proof-engine" element={<SlaProofEngineRoute />} />
+            {/* 4. SLA Proof Engine */}
+            <Route path="/sla-proof-engine" element={<SlaProofEngineRoute />} />
+            <Route path="/dashboard/sla-proof-engine" element={<SlaProofEngineRoute />} />
 
-          {/* 5. Analysis */}
-          <Route path="/analysis" element={<AnalysisRoute />} />
-          <Route path="/dashboard/analysis" element={<AnalysisRoute />} />
+            {/* 5. Analysis */}
+            <Route path="/analysis" element={<AnalysisRoute />} />
+            <Route path="/dashboard/analysis" element={<AnalysisRoute />} />
 
-          {/* 6. Reports */}
-          <Route path="/reports" element={<ReportsRoute />} />
-          <Route path="/dashboard/reports" element={<ReportsRoute />} />
+            {/* 6. Reports */}
+            <Route path="/reports" element={<ReportsRoute />} />
+            <Route path="/dashboard/reports" element={<ReportsRoute />} />
 
-          {/* 7. News Feed */}
-          <Route path="/news" element={<NewsFeedRoute />} />
-          <Route path="/dashboard/news" element={<NewsFeedRoute />} />
+            {/* 7. News Feed */}
+            <Route path="/news" element={<NewsFeedRoute />} />
+            <Route path="/dashboard/news" element={<NewsFeedRoute />} />
 
-          {/* 8. Sources */}
-          <Route path="/sources" element={<SourcesRoute />} />
-          <Route path="/dashboard/sources" element={<SourcesRoute />} />
+            {/* 8. Sources */}
+            <Route path="/sources" element={<SourcesRoute />} />
+            <Route path="/dashboard/sources" element={<SourcesRoute />} />
 
-          {/* 9. Alerts */}
-          <Route path="/alerts" element={<AlertsRoute />} />
-          <Route path="/dashboard/alerts" element={<AlertsRoute />} />
+            {/* 9. Alerts */}
+            <Route path="/alerts" element={<AlertsRoute />} />
+            <Route path="/dashboard/alerts" element={<AlertsRoute />} />
 
-          {/* Clean Redirects for any legacy Settings route */}
-          <Route path="/settings" element={<Navigate to="/" replace />} />
-          <Route path="/dashboard/settings" element={<Navigate to="/" replace />} />
+            {/* Clean Redirects for any legacy Settings route */}
+            <Route path="/settings" element={<Navigate to="/" replace />} />
+            <Route path="/dashboard/settings" element={<Navigate to="/" replace />} />
 
-          {/* Fallback Catch-All */}
-          <Route path="*" element={<Navigate to="/" replace />} />
-        </Route>
-      </Routes>
-    </BrowserRouter>
+            {/* Fallback Catch-All */}
+            <Route path="*" element={<Navigate to="/" replace />} />
+          </Route>
+        </Routes>
+      </BrowserRouter>
+    </WarRoomProvider>
   );
 }

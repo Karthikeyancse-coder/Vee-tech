@@ -109,12 +109,30 @@ export const SlaProofEngineView: React.FC<SlaProofEngineViewProps> = ({ articles
     format(new Date(), 'MMM dd, yyyy hh:mm:ss a')
   );
 
+  // High-precision live SLA stopwatch chronometer (100ms interval)
+  const [stopwatchMs, setStopwatchMs] = useState<number>(0);
+
   useEffect(() => {
     const timer = setInterval(() => {
       setVerificationTime(format(new Date(), 'MMM dd, yyyy hh:mm:ss a'));
     }, 1000);
     return () => clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    const start = Date.now();
+    const interval = setInterval(() => {
+      setStopwatchMs(Date.now() - start);
+    }, 100);
+    return () => clearInterval(interval);
+  }, []);
+
+  const liveChronometerStr = useMemo(() => {
+    const totalSec = (stopwatchMs / 1000) % 120;
+    const sec = Math.floor(totalSec);
+    const ms = Math.floor((totalSec - sec) * 100);
+    return `${String(sec).padStart(2, '0')}.${String(ms).padStart(2, '0')}s`;
+  }, [stopwatchMs]);
 
   // Filter toolbar state
   const [searchQuery, setSearchQuery] = useState('');
@@ -415,6 +433,15 @@ export const SlaProofEngineView: React.FC<SlaProofEngineViewProps> = ({ articles
 
         {/* Right Header Status */}
         <div className="flex flex-col sm:flex-row sm:items-center gap-3">
+          <button
+            onClick={downloadAuditReport}
+            className="flex items-center gap-1.5 bg-slate-900 hover:bg-slate-800 text-white font-semibold text-xs px-3.5 py-1.5 rounded-lg shadow-xs transition-colors cursor-pointer"
+            title="Download full forensic SLA telemetry proof as JSON"
+          >
+            <Download className="w-3.5 h-3.5" />
+            <span>Export JSON Audit</span>
+          </button>
+
           <div className="flex items-center gap-2 bg-white border border-slate-200 rounded-lg px-3 py-1.5 shadow-2xs">
             <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 font-mono">
               <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
@@ -699,6 +726,17 @@ export const SlaProofEngineView: React.FC<SlaProofEngineViewProps> = ({ articles
                 <span>Max Latency</span>
               </div>
               <span className="font-mono font-bold text-slate-900">{maxLatency}s</span>
+            </div>
+
+            {/* Live Precision Chronometer */}
+            <div className="pt-2.5 border-t border-slate-100 flex items-center justify-between">
+              <div className="flex items-center gap-1.5 text-slate-600 font-medium">
+                <Clock className="w-3.5 h-3.5 text-rose-500 animate-pulse" />
+                <span>Live Chronometer</span>
+              </div>
+              <span className="font-mono font-bold text-rose-600 bg-rose-50 px-2.5 py-0.5 rounded border border-rose-100 text-xs">
+                {liveChronometerStr}
+              </span>
             </div>
           </div>
         </div>

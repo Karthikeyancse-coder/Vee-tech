@@ -256,6 +256,38 @@ export const CompetitorRadarView: React.FC<CompetitorRadarViewProps> = ({
     });
     return sortArticles(filtered);
   }, [articles, activeTab, searchQuery, timeFilter, typeFilter, sortOrder]);
+  // Real entity sentiment computation (-100 to +100) from actual triaged articles
+  const entitySentimentData = useMemo(() => {
+    const entities = ['Infosys', 'TCS', 'Wipro', 'Accenture'] as const;
+    return entities.map((ent) => {
+      const entArticles = articles.filter((a) => getEntityForArticle(a) === ent);
+      const total = entArticles.length;
+      let pos = 0;
+      let neu = 0;
+      let neg = 0;
+      let totalRisk = 0;
+
+      entArticles.forEach((a) => {
+        if (a.sentiment === 'Positive') pos++;
+        else if (a.sentiment === 'Negative') neg++;
+        else neu++;
+        totalRisk += a.risk_score || 0;
+      });
+
+      const netScore = total > 0 ? Math.round(((pos - neg) / total) * 100) : 0;
+      const avgRisk = total > 0 ? Number((totalRisk / total).toFixed(1)) : 0;
+
+      return {
+        entity: ent,
+        total,
+        pos,
+        neu,
+        neg,
+        netScore,
+        avgRisk
+      };
+    });
+  }, [articles]);
 
   // 5. COMPETITIVE LANDSCAPE DONUT CHART (Zero-mock math)
   const landscapeTotal = infosysCount + tcsCount + wiproCount + accentureCount;
@@ -681,6 +713,111 @@ export const CompetitorRadarView: React.FC<CompetitorRadarViewProps> = ({
               {activeThreatsCount > 0 ? 'require executive attention' : 'nominal threat baseline'}
             </span>
           </div>
+        </div>
+      </div>
+
+      {/* ========================================================= */}
+      {/* 2.5 REAL-TIME ENTITY SENTIMENT & VULNERABILITY RADAR */}
+      {/* ========================================================= */}
+      <div className="bg-white border border-slate-200 rounded-2xl p-4 shadow-2xs space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <TrendingUp className="w-4 h-4 text-slate-700" />
+            <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider font-mono">
+              Live Entity Sentiment &amp; Vulnerability Matrix
+            </h3>
+          </div>
+          <span className="text-[11px] text-slate-400 font-mono">
+            Derived strictly from live AI triage streams (-100 to +100)
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          {entitySentimentData.map((data) => {
+            const isClient = data.entity === 'Infosys';
+            const scoreColor =
+              data.netScore > 10
+                ? 'text-emerald-600'
+                : data.netScore < -10
+                ? 'text-rose-600'
+                : 'text-slate-600';
+            const badgeBg =
+              data.netScore > 10
+                ? 'bg-emerald-50 text-emerald-700 border-emerald-200'
+                : data.netScore < -10
+                ? 'bg-rose-50 text-rose-700 border-rose-200'
+                : 'bg-slate-100 text-slate-600 border-slate-200';
+
+            const scoreLabel =
+              data.total === 0
+                ? 'No Signals'
+                : data.netScore > 10
+                ? 'Positive Sentiment'
+                : data.netScore < -10
+                ? isClient ? 'Crisis Pressure' : 'Vulnerable (RFP Target)'
+                : 'Neutral Baseline';
+
+            return (
+              <div
+                key={data.entity}
+                className={`p-3.5 rounded-xl border transition-all ${
+                  isClient
+                    ? 'bg-blue-50/40 border-blue-200/80 shadow-2xs'
+                    : 'bg-slate-50/50 border-slate-200/70 hover:bg-white hover:border-slate-300'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className="text-xs font-bold text-slate-900 font-mono flex items-center gap-1.5">
+                    <span
+                      className={`w-2 h-2 rounded-full ${
+                        isClient ? 'bg-blue-600' : 'bg-slate-400'
+                      }`}
+                    />
+                    {data.entity} {isClient && <span className="text-[10px] text-blue-600 font-sans font-semibold">(Client)</span>}
+                  </span>
+                  <span className={`px-2 py-0.5 rounded-full text-[10px] font-semibold border ${badgeBg}`}>
+                    {scoreLabel}
+                  </span>
+                </div>
+
+                <div className="flex items-baseline justify-between mt-2">
+                  <div className="flex items-baseline gap-1">
+                    <span className={`text-xl font-black font-mono ${scoreColor}`}>
+                      {data.total === 0 ? '0' : (data.netScore > 0 ? `+${data.netScore}` : data.netScore)}
+                    </span>
+                    <span className="text-[10px] text-slate-400 font-mono">/ 100 net</span>
+                  </div>
+                  <div className="text-right">
+                    <span className="text-[10px] text-slate-400 block font-medium">Avg Risk</span>
+                    <span className="text-xs font-bold text-slate-800 font-mono">{data.avgRisk} / 10</span>
+                  </div>
+                </div>
+
+                {/* Micro Sentiment Distribution Bar */}
+                <div className="mt-2.5 space-y-1">
+                  <div className="h-1.5 w-full bg-slate-200/80 rounded-full overflow-hidden flex">
+                    <div
+                      style={{ width: `${data.total > 0 ? (data.pos / data.total) * 100 : 0}%` }}
+                      className="bg-emerald-500 h-full transition-all duration-500"
+                    />
+                    <div
+                      style={{ width: `${data.total > 0 ? (data.neu / data.total) * 100 : 0}%` }}
+                      className="bg-slate-300 h-full transition-all duration-500"
+                    />
+                    <div
+                      style={{ width: `${data.total > 0 ? (data.neg / data.total) * 100 : 0}%` }}
+                      className="bg-rose-500 h-full transition-all duration-500"
+                    />
+                  </div>
+                  <div className="flex items-center justify-between text-[10px] text-slate-400 font-mono pt-0.5">
+                    <span>Pos: <strong className="text-emerald-600">{data.pos}</strong></span>
+                    <span>Neu: <strong className="text-slate-600">{data.neu}</strong></span>
+                    <span>Neg: <strong className="text-rose-600">{data.neg}</strong></span>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
         </div>
       </div>
 

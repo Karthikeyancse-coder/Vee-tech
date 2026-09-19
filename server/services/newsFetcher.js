@@ -128,12 +128,23 @@ export async function fetchNewsApi(keywords = DEFAULT_KEYWORDS) {
   }
 }
 
+// GDELT Cooldown Tracker (5-minute backoff on 429 or timeout)
+let gdeltCooldownUntil = 0;
+
 // ============================================================================
-// 2. GDELT DOC 2.0 API (Global News Discovery)
+// 2. GDELT DOC 2.0 (The Global Discovery Engine)
 // ============================================================================
-export async function fetchGdeltDoc(query = 'Infosys OR TCS OR Wipro') {
+export async function fetchGdeltDoc(query = '("Infosys" OR "TCS" OR "Wipro" OR "Accenture")') {
+  // Check if GDELT is currently in cooldown
+  const now = Date.now();
+  if (now < gdeltCooldownUntil) {
+    const remainingSeconds = Math.ceil((gdeltCooldownUntil - now) / 1000);
+    console.log(`[GDELT DOC] ⏳ In cooldown for another ${remainingSeconds}s (rate limit / timeout backoff). Skipping.`);
+    return [];
+  }
+
   const url = 'https://api.gdeltproject.org/api/v2/doc/doc';
-  console.log('[GDELT DOC] Querying Global News Discovery API (timespan=2h, sort=datedesc)...');
+  console.log(`[GDELT DOC] Querying global event database (timespan: 2h, timeout: 3.5s)...`);
 
   try {
     const response = await axios.get(url, {
@@ -146,7 +157,7 @@ export async function fetchGdeltDoc(query = 'Infosys OR TCS OR Wipro') {
         maxrecords: 15,
         _cb: Date.now()     // Cache-buster
       },
-      timeout: 14000,
+      timeout: 3500,        // Strict 3.5-second SLA timeout
       headers: {
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
         'Cache-Control': 'no-cache, no-store, must-revalidate',
@@ -156,7 +167,8 @@ export async function fetchGdeltDoc(query = 'Infosys OR TCS OR Wipro') {
 
     // Check if GDELT returned rate-limit plain text instead of JSON
     if (typeof response.data === 'string' && response.data.includes('Please limit requests')) {
-      console.warn('[GDELT DOC] ⚠️ Rate limiter engaged. Skipping this cycle.');
+      console.warn('[GDELT DOC] ⚠️ Rate limiter engaged (Please limit requests). Engaging 5-minute cooldown.');
+      gdeltCooldownUntil = Date.now() + 5 * 60 * 1000;
       return [];
     }
 
@@ -180,11 +192,15 @@ export async function fetchGdeltDoc(query = 'Infosys OR TCS OR Wipro') {
     }
     return [];
   } catch (error) {
-    // Graceful 429 handling — GDELT has strict rate limits on free tier
-    if (error.response?.status === 429) {
-      console.warn('[GDELT DOC] \u26a0\ufe0f Rate limited (HTTP 429). Pausing GDELT ingestion for this cycle. Will retry in 45s.');
+    const isTimeout = error.code === 'ECONNABORTED' || error.message.includes('timeout') || error.message.includes('TIMEDOUT');
+    if (isTimeout) {
+      console.warn('[GDELT DOC] ⏱️ Timeout (>3.5s). Engaging 5-minute cooldown.');
+      gdeltCooldownUntil = Date.now() + 5 * 60 * 1000;
+    } else if (error.response?.status === 429) {
+      console.warn('[GDELT DOC] ⚠️ Rate limited (HTTP 429). Engaging 5-minute cooldown.');
+      gdeltCooldownUntil = Date.now() + 5 * 60 * 1000;
     } else {
-      console.warn(`[GDELT DOC] \u26a0\ufe0f Skipped this cycle: ${error.response?.status || 'ERR'} - ${error.message}`);
+      console.warn(`[GDELT DOC] ⚠️ Skipped this cycle: ${error.response?.status || 'ERR'} - ${error.message}`);
     }
     return [];
   }
@@ -236,9 +252,9 @@ export function enrichWithGdeltContext(article) {
 export async function fetchGuardianNews(keywords = 'Infosys OR TCS OR Wipro OR Accenture') {
   const apiKey = (process.env.GUARDIAN_API_KEY || '').trim();
 
-  // Skip entirely if no real key — 'test' key has extremely limited quota and causes 401
+  // Clean inactive skip if no key configured
   if (!apiKey || apiKey === 'test') {
-    console.warn('[The Guardian] \u26a0\ufe0f Skipped: GUARDIAN_API_KEY not configured in .env (get a free key at open-platform.theguardian.com).');
+    console.log('[The Guardian] ℹ️ Source inactive: GUARDIAN_API_KEY not configured. Skipping cleanly.');
     return [];
   }
 
@@ -508,8 +524,10 @@ export async function fetchMultiSourceNews(processIngestCallback) {
 
     // Enrich with GDELT Tone & Thematic Context
     const enrichedContent = enrichWithGdeltContext(article);
+    const correlation_id = `corr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
 
     const payload = {
+      correlation_id,
       api_source: article.api_source || 'Google RSS',
       source_name: article.source_name,
       title: article.title,
