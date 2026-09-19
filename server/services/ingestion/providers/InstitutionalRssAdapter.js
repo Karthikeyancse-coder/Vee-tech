@@ -48,6 +48,12 @@ export class InstitutionalRssAdapter extends ProviderAdapter {
   }
 
   async fetch() {
+    if (Date.now() < this.cooldownUntil) {
+      const remainingSec = Math.ceil((this.cooldownUntil - Date.now()) / 1000);
+      console.log(`[ProviderAdapter:${this.providerName}] ⏭ Skipped fetch — ${remainingSec}s remaining in cooldown`);
+      return [];
+    }
+
     // Stagger feed batches to avoid saturating the DNS resolver and TCP connection
     // ramp simultaneously — feeds launched all-at-once compete for the same socket
     // pool and all time out together. Batching 3 at a time with a 500ms gap spreads

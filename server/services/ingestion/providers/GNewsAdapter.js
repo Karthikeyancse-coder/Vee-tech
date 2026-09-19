@@ -36,15 +36,14 @@ export class GNewsAdapter extends ProviderAdapter {
   }
 
   async fetch() {
-    if (!this.apiKey) {
-      this.metrics.status = 'DISABLED';
+    if (Date.now() < this.cooldownUntil) {
+      const remainingSec = Math.ceil((this.cooldownUntil - Date.now()) / 1000);
+      console.log(`[ProviderAdapter:${this.providerName}] ⏭ Skipped fetch — ${remainingSec}s remaining in cooldown`);
       return [];
     }
 
-    // Cooldown gate: abort network request immediately if in cooldown
-    if (Date.now() < this.cooldownUntil) {
-      const remainingSec = Math.ceil((this.cooldownUntil - Date.now()) / 1000);
-      console.log(`[ProviderAdapter:${this.providerName}] ⏳ In cooldown for another ${remainingSec}s`);
+    if (!this.apiKey) {
+      this.metrics.status = 'DISABLED';
       return [];
     }
 

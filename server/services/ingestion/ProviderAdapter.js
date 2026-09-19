@@ -109,24 +109,15 @@ export class ProviderAdapter extends EventEmitter {
       this.timer = null;
     }
 
+    // If currently cooling down, sleep for the full cooldown window instead of waking up every 30s
     let effectiveDelay = delayMs;
-    // If currently cooling down, schedule the countdown check at reasonable intervals (max 30s)
     if (Date.now() < this.cooldownUntil) {
-      const remainingMs = this.cooldownUntil - Date.now();
-      effectiveDelay = Math.min(Math.max(remainingMs, 1000), 30000);
+      effectiveDelay = Math.max(1000, this.cooldownUntil - Date.now());
     }
 
     this.timer = setTimeout(async () => {
       this.timer = null;
       if (!this.isRunning) return;
-
-      // Rate limit cooldown check — completely block network request during cooldown
-      if (Date.now() < this.cooldownUntil) {
-        const remainingSec = Math.ceil((this.cooldownUntil - Date.now()) / 1000);
-        console.log(`[ProviderAdapter:${this.providerName}] ⏳ In cooldown for another ${remainingSec}s`);
-        this._scheduleNextPoll(Math.min(Math.max(remainingSec * 1000, 1000), 30000));
-        return;
-      }
 
       if (!this.isFetching) {
         this.isFetching = true;
@@ -134,10 +125,10 @@ export class ProviderAdapter extends EventEmitter {
         this.metrics.requests++;
 
         try {
-          // Double-check cooldown before triggering network call
+          // Gate check: skip fetch if in active cooldown
           if (Date.now() < this.cooldownUntil) {
             const remainingSec = Math.ceil((this.cooldownUntil - Date.now()) / 1000);
-            console.log(`[ProviderAdapter:${this.providerName}] ⏳ In cooldown for another ${remainingSec}s`);
+            console.log(`[ProviderAdapter:${this.providerName}] ⏭ Skipped fetch — ${remainingSec}s remaining in cooldown`);
             return;
           }
 
@@ -161,10 +152,9 @@ export class ProviderAdapter extends EventEmitter {
         }
       }
 
-      // Schedule next poll: if cooldown was activated during fetch, use cooldown countdown delay
+      // Schedule next poll: if cooldown was activated during fetch, wait the full remaining duration
       if (Date.now() < this.cooldownUntil) {
-        const remainingMs = this.cooldownUntil - Date.now();
-        this._scheduleNextPoll(Math.min(Math.max(remainingMs, 1000), 30000));
+        this._scheduleNextPoll(Math.max(1000, this.cooldownUntil - Date.now()));
       } else {
         this._scheduleNextPoll(this.intervalMs);
       }

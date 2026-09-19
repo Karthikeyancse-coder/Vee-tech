@@ -37,6 +37,12 @@ export class GoogleRssAdapter extends ProviderAdapter {
   }
 
   async fetch() {
+    if (Date.now() < this.cooldownUntil) {
+      const remainingSec = Math.ceil((this.cooldownUntil - Date.now()) / 1000);
+      console.log(`[ProviderAdapter:${this.providerName}] ⏭ Skipped fetch — ${remainingSec}s remaining in cooldown`);
+      return [];
+    }
+
     const url = this.buildUrl();
     const res = await axios.get(url, {
       timeout: 8000, // 8s timeout to avoid false aborts during peak activity

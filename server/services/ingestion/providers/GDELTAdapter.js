@@ -39,6 +39,12 @@ export class GDELTAdapter extends ProviderAdapter {
   }
 
   async fetch() {
+    if (Date.now() < this.cooldownUntil) {
+      const remainingSec = Math.ceil((this.cooldownUntil - Date.now()) / 1000);
+      console.log(`[ProviderAdapter:${this.providerName}] ⏭ Skipped fetch — ${remainingSec}s remaining in cooldown`);
+      return [];
+    }
+
     if (!this.enabled) {
       this.metrics.status = 'DISABLED';
       return [];

@@ -154,6 +154,9 @@ let registeredCallback = null;
 // This keeps their daily 100-request quota alive across the full day.
 let newsApiCooldownUntil = 0;
 let gNewsCooldownUntil = 0;
+let newsDataCooldownUntil = 0;
+let currentsCooldownUntil = 0;
+let guardianCooldownUntil = 0;
 const QUOTA_BACKOFF_MS = 30 * 60 * 1000; // 30 minutes
 
 // Independent slow-poll timestamps for quota-constrained sources.
@@ -222,18 +225,17 @@ function isSeenRssGuid(guid) {
 // 1. NEWSAPI (The Global Aggregator)
 // ============================================================================
 export async function fetchNewsApi(keywords = DEFAULT_KEYWORDS) {
+  if (Date.now() < newsApiCooldownUntil) {
+    const remainingSec = Math.ceil((newsApiCooldownUntil - Date.now()) / 1000);
+    console.log(`[ProviderAdapter:newsapi] ⏭ Skipped fetch — ${remainingSec}s remaining in cooldown`);
+    sourceTelemetry.newsapi.lastStatus = 'Quota Cooldown';
+    return [];
+  }
+
   const apiKey = (process.env.NEWSAPI_KEY || '').trim();
 
   if (!apiKey) {
     console.log('[NewsAPI] NEWSAPI_KEY not configured in .env; skipping source.');
-    return [];
-  }
-
-  // Quota cooldown: skip if we hit the daily limit recently
-  if (Date.now() < newsApiCooldownUntil) {
-    const mins = Math.ceil((newsApiCooldownUntil - Date.now()) / 60000);
-    console.log(`[NewsAPI] ⏳ Daily quota exhausted — cooling down for another ${mins}min. Skipping.`);
-    sourceTelemetry.newsapi.lastStatus = 'Quota Cooldown';
     return [];
   }
 
@@ -438,6 +440,12 @@ export function enrichWithGdeltContext(article) {
 // 4. THE GUARDIAN CONTENT API (The Premium Wire)
 // ============================================================================
 export async function fetchGuardianNews(keywords = 'Infosys OR TCS OR Wipro OR Accenture') {
+  if (Date.now() < guardianCooldownUntil) {
+    const remainingSec = Math.ceil((guardianCooldownUntil - Date.now()) / 1000);
+    console.log(`[ProviderAdapter:guardian] ⏭ Skipped fetch — ${remainingSec}s remaining in cooldown`);
+    return [];
+  }
+
   const apiKey = (process.env.GUARDIAN_API_KEY || '').trim();
 
   // Clean inactive skip if no key configured
@@ -500,8 +508,9 @@ export async function fetchGuardianNews(keywords = 'Infosys OR TCS OR Wipro OR A
       sourceTelemetry.guardian.lastStatus = 'Unauthorized';
       console.warn('[The Guardian] ⚠️ 401 Unauthorized — check GUARDIAN_API_KEY in server/.env.');
     } else if (error.response?.status === 429) {
+      guardianCooldownUntil = Date.now() + QUOTA_BACKOFF_MS;
       sourceTelemetry.guardian.lastStatus = 'Rate Limited';
-      console.warn('[The Guardian] ⚠️ Rate limited (HTTP 429). Skipping this cycle.');
+      console.warn('[The Guardian] ⚠️ Rate limited (HTTP 429). Engaging cooldown.');
     } else {
       sourceTelemetry.guardian.lastStatus = 'Error';
       console.warn(`[The Guardian] ⚠️ Skipped: ${error.response?.status || 'ERR'} - ${error.message}`);
@@ -671,18 +680,17 @@ export const fetchRSSFeeds = fetchPublisherRss;
  * @returns {Promise<Array<object>>} Normalized article array
  */
 export async function fetchGNews() {
+  if (Date.now() < gNewsCooldownUntil) {
+    const remainingSec = Math.ceil((gNewsCooldownUntil - Date.now()) / 1000);
+    console.log(`[ProviderAdapter:gnews] ⏭ Skipped fetch — ${remainingSec}s remaining in cooldown`);
+    sourceTelemetry.gnews.lastStatus = 'Quota Cooldown';
+    return [];
+  }
+
   const apiKey = (process.env.GNEWS_API_KEY || '').trim();
 
   if (!apiKey) {
     console.log('[GNews] GNEWS_API_KEY not configured in .env; skipping source.');
-    return [];
-  }
-
-  // Quota cooldown: GNews free plan = 100 req/day. Back off for 30min after quota hit.
-  if (Date.now() < gNewsCooldownUntil) {
-    const mins = Math.ceil((gNewsCooldownUntil - Date.now()) / 60000);
-    console.log(`[GNews] ⏳ Daily quota exhausted — cooling down for another ${mins}min. Skipping.`);
-    sourceTelemetry.gnews.lastStatus = 'Quota Cooldown';
     return [];
   }
 
@@ -768,6 +776,12 @@ export async function fetchGNews() {
  * @returns {Promise<Array<object>>} Normalized article array
  */
 export async function fetchNewsData() {
+  if (Date.now() < newsDataCooldownUntil) {
+    const remainingSec = Math.ceil((newsDataCooldownUntil - Date.now()) / 1000);
+    console.log(`[ProviderAdapter:newsdata] ⏭ Skipped fetch — ${remainingSec}s remaining in cooldown`);
+    return [];
+  }
+
   const apiKey = (process.env.NEWSDATA_API_KEY || '').trim();
 
   if (!apiKey) {
@@ -822,8 +836,9 @@ export async function fetchNewsData() {
     return [];
   } catch (error) {
     if (error.response?.status === 429 || error.response?.status === 401 || error.response?.status === 403) {
+      newsDataCooldownUntil = Date.now() + QUOTA_BACKOFF_MS;
       sourceTelemetry.newsdata.lastStatus = 'Rate Limited';
-      console.warn(`[NewsData] ⚠️ API unavailable or rate limited. (HTTP ${error.response.status})`);
+      console.warn(`[NewsData] ⚠️ API unavailable or rate limited. (HTTP ${error.response.status}). Engaging cooldown.`);
     } else {
       sourceTelemetry.newsdata.lastStatus = 'Error';
       console.warn(`[NewsData] ⚠️ API unavailable or rate limited. (${error.message})`);
@@ -842,6 +857,12 @@ export async function fetchNewsData() {
  * @returns {Promise<Array<object>>} Normalized article array
  */
 export async function fetchCurrentsNews() {
+  if (Date.now() < currentsCooldownUntil) {
+    const remainingSec = Math.ceil((currentsCooldownUntil - Date.now()) / 1000);
+    console.log(`[ProviderAdapter:currents] ⏭ Skipped fetch — ${remainingSec}s remaining in cooldown`);
+    return [];
+  }
+
   const apiKey = (process.env.CURRENTS_API_KEY || '').trim();
 
   if (!apiKey) {
@@ -894,8 +915,9 @@ export async function fetchCurrentsNews() {
     return [];
   } catch (error) {
     if (error.response?.status === 429 || error.response?.status === 401 || error.response?.status === 403) {
+      currentsCooldownUntil = Date.now() + QUOTA_BACKOFF_MS;
       sourceTelemetry.currents.lastStatus = 'Rate Limited';
-      console.warn(`[Currents] ⚠️ API unavailable or rate limited (HTTP ${error.response?.status}).`);
+      console.warn(`[Currents] ⚠️ API unavailable or rate limited (HTTP ${error.response?.status}). Engaging cooldown.`);
     } else {
       sourceTelemetry.currents.lastStatus = 'Error';
       console.warn(`[Currents] ⚠️ API request notice (${error.message}).`);

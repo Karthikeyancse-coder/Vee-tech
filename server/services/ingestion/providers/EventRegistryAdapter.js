@@ -36,6 +36,12 @@ export class EventRegistryAdapter extends ProviderAdapter {
   }
 
   async fetch() {
+    if (Date.now() < this.cooldownUntil) {
+      const remainingSec = Math.ceil((this.cooldownUntil - Date.now()) / 1000);
+      console.log(`[ProviderAdapter:${this.providerName}] ⏭ Skipped fetch — ${remainingSec}s remaining in cooldown`);
+      return [];
+    }
+
     if (!this.apiKey) {
       this.metrics.status = 'DISABLED';
       return [];
