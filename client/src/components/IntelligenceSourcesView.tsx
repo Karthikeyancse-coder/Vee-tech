@@ -38,13 +38,13 @@ interface SourceConfig {
   id: string;
   name: string;
   description: string;
-  type: 'REST API' | 'RSS/XML' | 'XML Stream' | 'AT Protocol' | 'WebSocket';
+  type: 'REST API' | 'RSS/XML' | 'XML Stream' | 'AT Protocol';
   category: string;
   intervalSec: number;
   tags: string[];
   icon: React.ComponentType<{ className?: string }>;
   iconTheme: string;
-  status: 'Operational' | 'Degraded' | 'Error' | 'Disabled' | 'Decommissioned';
+  status: 'Operational' | 'Degraded' | 'Error' | 'Disabled';
   provider: string;
   apiSourceMatch: string[];
   lastPolled?: string | null;
@@ -135,45 +135,31 @@ export const IntelligenceSourcesView: React.FC<IntelligenceSourcesViewProps> = (
         apiSourceMatch: ['bluesky', 'bluesky social']
       },
       {
-        id: 'nostr',
-        name: 'Nostr Relay Wire (Decentralized kind:1)',
-        description: 'Decentralized kind:1 text note firehose querying nos.lol, primal.net, and damus.io public relays with 5s clean teardown.',
-        type: 'WebSocket',
-        category: 'Social Wire',
-        intervalSec: 45,
-        tags: ['WebSocket', 'Decentralized', 'Nostr', 'Censorship-Resistant'],
-        icon: Radio,
-        iconTheme: 'bg-purple-50 text-purple-600 border-purple-100',
-        status: 'Operational',
-        provider: 'Nostr Public Relays',
-        apiSourceMatch: ['nostr', 'nostr relay wire']
-      },
-      {
         id: 'googlenews',
-        name: 'Google News RSS (Decommissioned)',
-        description: 'Legacy RSS feed — decommissioned in favor of pure-API and WebSocket firehoses.',
+        name: 'Google News RSS (Instant Wire)',
+        description: 'Real-time RSS feed for Google News with instant updates and 4h freshness window.',
         type: 'XML Stream',
         category: 'Wire',
         intervalSec: 30,
-        tags: ['Decommissioned', 'Legacy'],
+        tags: ['XML Stream', 'News', 'Real-time', 'International'],
         icon: Rss,
-        iconTheme: 'bg-slate-100 text-slate-400 border-slate-200',
-        status: 'Decommissioned',
-        provider: 'Google News Syndicate (Decommissioned)',
+        iconTheme: 'bg-amber-50 text-amber-600 border-amber-100',
+        status: 'Operational',
+        provider: 'Google News Syndicate',
         apiSourceMatch: ['googlenews', 'google news rss', 'rss', 'google news']
       },
       {
         id: 'institutional',
-        name: 'Institutional Publisher Wires (Decommissioned)',
-        description: 'Legacy RSS/XML publisher feeds — decommissioned in favor of pure-API and WebSocket firehoses.',
+        name: 'Institutional Publisher Wires (ET, Mint, BS)',
+        description: 'RSS/XML feeds from Economic Times, Mint, Business Standard and financial wire feeds.',
         type: 'RSS/XML',
         category: 'Institutional',
         intervalSec: 30,
-        tags: ['Decommissioned', 'Legacy'],
+        tags: ['RSS/XML', 'Finance', 'India', 'Institutional'],
         icon: Building2,
-        iconTheme: 'bg-slate-100 text-slate-400 border-slate-200',
-        status: 'Decommissioned',
-        provider: 'Financial Wire Feeds (Decommissioned)',
+        iconTheme: 'bg-blue-50 text-blue-600 border-blue-100',
+        status: 'Operational',
+        provider: 'Financial Wire Feeds',
         apiSourceMatch: ['economic times', 'mint', 'business standard', 'wire', 'institutional', 'et rss']
       },
       {

@@ -33,7 +33,6 @@ export interface WarRoomContextValue {
   isRealtimeActive: boolean;
   isSimulating: boolean;
   isFetchingLive: boolean;
-  pulsingArticleIds: Set<string>;
   fetchArticles: (isInitial?: boolean) => Promise<void>;
   acknowledgeArticle: (id: string) => Promise<void>;
   fetchLiveNews: () => Promise<void>;
@@ -88,7 +87,6 @@ export const WarRoomProvider: React.FC<{ children: ReactNode }> = ({ children })
   const [isRealtimeActive, setIsRealtimeActive] = useState<boolean>(false);
   const [isSimulating, setIsSimulating] = useState<boolean>(false);
   const [isFetchingLive, setIsFetchingLive] = useState<boolean>(false);
-  const [pulsingArticleIds, setPulsingArticleIds] = useState<Set<string>>(new Set());
 
   // 1. Fetch initial load of articles with exponential backoff
   const fetchArticles = useCallback(async (isInitial = false) => {
@@ -155,7 +153,6 @@ export const WarRoomProvider: React.FC<{ children: ReactNode }> = ({ children })
 
     let pollingInterval: ReturnType<typeof setInterval> | null = null;
     let channel: any = null;
-    let broadcastChannel: any = null;
 
     const startFallbackPolling = () => {
       if (!pollingInterval) {
@@ -226,41 +223,6 @@ export const WarRoomProvider: React.FC<{ children: ReactNode }> = ({ children })
             startFallbackPolling();
           }
         });
-
-      // Connect to high-velocity in-memory Supabase Broadcast channel ('crisis-war-room')
-      broadcastChannel = supabase
-        .channel('crisis-war-room')
-        .on(
-          'broadcast',
-          { event: 'new_triaged_alert' },
-          (response: { payload: Article }) => {
-            const incoming = response?.payload;
-            if (!incoming || !incoming.id) return;
-            console.log('⚡ [WarRoomProvider] Realtime Broadcast Alert Received:', incoming.title, incoming.risk_level);
-
-            // Prepend incoming payload directly to active state array
-            setArticles((currentArticles) => {
-              if (currentArticles.some((a) => a.id === incoming.id)) {
-                return currentArticles;
-              }
-              return [incoming, ...currentArticles];
-            });
-
-            // Mark for temporary pulse ring
-            setPulsingArticleIds((prev) => new Set([...prev, incoming.id]));
-
-            setTimeout(() => {
-              setPulsingArticleIds((prev) => {
-                const next = new Set(prev);
-                next.delete(incoming.id);
-                return next;
-              });
-            }, 8000);
-          }
-        )
-        .subscribe((bStatus) => {
-          console.log(`[Supabase Broadcast 'crisis-war-room' Status]: ${bStatus}`);
-        });
     } catch (channelErr: any) {
       console.error('[WarRoomProvider] Failed to initialize Realtime channel:', channelErr.message);
       startFallbackPolling();
@@ -270,9 +232,6 @@ export const WarRoomProvider: React.FC<{ children: ReactNode }> = ({ children })
       stopFallbackPolling();
       if (channel && supabase) {
         supabase.removeChannel(channel);
-      }
-      if (broadcastChannel && supabase) {
-        supabase.removeChannel(broadcastChannel);
       }
     };
   }, [fetchArticles]);
@@ -351,7 +310,6 @@ export const WarRoomProvider: React.FC<{ children: ReactNode }> = ({ children })
         isRealtimeActive,
         isSimulating,
         isFetchingLive,
-        pulsingArticleIds,
         fetchArticles,
         acknowledgeArticle,
         fetchLiveNews,

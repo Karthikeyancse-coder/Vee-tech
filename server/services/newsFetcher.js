@@ -131,10 +131,9 @@ export const sourceTelemetry = {
   gnews: { id: 'gnews', name: 'GNews AI-Curated Wire', lastPolled: null, lastStatus: 'Operational', lastCount: 0, lastNewArticle: null },
   newsdata: { id: 'newsdata', name: 'NewsData.io Real-Time Archive', lastPolled: null, lastStatus: 'Operational', lastCount: 0, lastNewArticle: null },
   guardian: { id: 'guardian', name: 'The Guardian Content API', lastPolled: null, lastStatus: 'Operational', lastCount: 0, lastNewArticle: null },
-  bluesky: { id: 'bluesky', name: 'Bluesky Social Wire (AT Protocol)', lastPolled: null, lastStatus: 'Operational', lastCount: 0, lastNewArticle: null },
-  nostr: { id: 'nostr', name: 'Nostr Relay Wire (Decentralized kind:1)', lastPolled: null, lastStatus: 'Operational', lastCount: 0, lastNewArticle: null },
-  googlenews: { id: 'googlenews', name: 'Google News RSS (Decommissioned)', lastPolled: null, lastStatus: 'Decommissioned', lastCount: 0, lastNewArticle: null },
-  institutional: { id: 'institutional', name: 'Institutional Publisher Wires (Decommissioned)', lastPolled: null, lastStatus: 'Decommissioned', lastCount: 0, lastNewArticle: null },
+  googlenews: { id: 'googlenews', name: 'Google News RSS (Instant Wire)', lastPolled: null, lastStatus: 'Operational', lastCount: 0, lastNewArticle: null },
+  institutional: { id: 'institutional', name: 'Institutional Publisher Wires (ET, Mint, BS)', lastPolled: null, lastStatus: 'Operational', lastCount: 0, lastNewArticle: null },
+  bluesky: { id: 'bluesky', name: 'Bluesky Social Wire (AT Protocol Trial)', lastPolled: null, lastStatus: 'Operational', lastCount: 0, lastNewArticle: null },
   gdelt: { id: 'gdelt', name: 'GDELT DOC 2.0 (Standby Archive)', lastPolled: null, lastStatus: 'Standby', lastCount: 0, lastNewArticle: null }
 };
 
@@ -412,130 +411,123 @@ export async function fetchGuardianNews(keywords = 'Infosys OR TCS OR Wipro OR A
 }
 
 // ============================================================================
-// 5. NOSTR RELAY FIREHOSE (Decentralized Censorship-Resistant Stream)
+// 5. PUBLISHER RSS FEEDS (The Institutional & High-Freshness Wire)
 // ============================================================================
-/**
- * Ingests live notes from decentralized Nostr relays (wss://nos.lol, wss://relay.primal.net, wss://relay.damus.io).
- * Connects via WebSocket, subscribes to kind: 1 notes matching target keywords,
- * enriches embedded links with Cheerio HTML scraping, and cleanly invokes ws.terminate()
- * after a strict 5-second polling window to prevent memory leaks in the Node runtime.
- *
- * @returns {Promise<Array<object>>} Normalized Nostr events
- */
-export async function fetchNostrStream() {
-  sourceTelemetry.nostr.lastPolled = new Date().toISOString();
-  console.log('[Nostr] ⚡ Connecting to decentralized relays (nos.lol, primal.net, damus.io)...');
+function buildGoogleRssUrl() {
+  const query = encodeURIComponent(
+    '(Infosys OR "Infosys ADR" OR "NYSE: INFY" OR TCS OR Wipro OR "Wipro ADR" OR Accenture OR "IT services outage" OR "banking cyberattack" OR Finacle) when:4h'
+  );
+  return `https://news.google.com/rss/search?q=${query}&hl=en-IN&gl=IN&ceid=IN:en&_cb=${Date.now()}`;
+}
 
-  const relays = [
-    'wss://nos.lol',
-    'wss://relay.primal.net',
-    'wss://relay.damus.io'
-  ];
+const WHITELISTED_RSS_FEEDS = [
+  {
+    name: 'The Economic Times',
+    api_source: 'ET RSS',
+    url: 'https://economictimes.indiatimes.com/tech/ites/rssfeeds/13357555.cms'
+  },
+  {
+    name: 'The Economic Times Top Stories',
+    api_source: 'ET RSS',
+    url: 'https://economictimes.indiatimes.com/rssfeedstopstories.cms'
+  },
+  {
+    name: 'Google News Live RSS',
+    api_source: 'Google RSS',
+    get url() { return buildGoogleRssUrl(); }  // Fresh URL with cache-buster on each call
+  }
+];
 
-  const targetRegex = /\b(Infosys|TCS|Tata Consultancy Services|Wipro|Accenture|Finacle)\b/i;
-  const collectedNotes = new Map();
+export async function fetchPublisherRss() {
+  sourceTelemetry.googlenews.lastPolled = new Date().toISOString();
+  sourceTelemetry.institutional.lastPolled = new Date().toISOString();
+  console.log('[Publisher RSS] Querying whitelisted publisher feeds (The Economic Times, Livemint, Google News)...');
+  const aggregatedItems = [];
 
-  const connectRelay = (url) => new Promise((resolve) => {
-    let ws = null;
-    let timeoutId = null;
-
-    const cleanup = () => {
-      if (timeoutId) clearTimeout(timeoutId);
-      if (ws) {
-        try {
-          ws.terminate(); // Safe explicit socket teardown per specification
-        } catch (_) {}
-      }
-      resolve();
-    };
-
-    // Strict 5000ms teardown window to prevent memory leaks
-    timeoutId = setTimeout(() => {
-      cleanup();
-    }, 5000);
-
+  for (const feed of WHITELISTED_RSS_FEEDS) {
     try {
-      ws = new WebSocket(url, { handshakeTimeout: 4000 });
-
-      ws.on('open', () => {
-        try {
-          // Subscribe to kind: 1 (text notes)
-          const subId = `vee_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-          ws.send(JSON.stringify(['REQ', subId, { kinds: [1], limit: 40 }]));
-        } catch (_) {
-          cleanup();
+      const feedUrl = typeof feed.url === 'string' ? feed.url : feed.url;
+      console.log(`[Publisher RSS] Fetching: ${feed.name} → ${feedUrl.slice(0, 90)}...`);
+      const response = await axios.get(feedUrl, {
+        timeout: 9000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
+          'Cache-Control': 'no-cache, no-store, must-revalidate',
+          'Pragma': 'no-cache',
+          'Expires': '0'
         }
       });
 
-      ws.on('message', (msg) => {
-        try {
-          const data = JSON.parse(msg.toString());
-          if (data[0] === 'EVENT' && data[2]?.content) {
-            const event = data[2];
-            const content = cleanHtml(event.content);
-            if (targetRegex.test(content) && !collectedNotes.has(event.id)) {
-              collectedNotes.set(event.id, event);
+      const $ = cheerio.load(response.data, { xmlMode: true });
+      const items = $('item').toArray();
+
+      for (const el of items) {
+        const title = cleanHtml($(el).find('title').text());
+        const link = $(el).find('link').text().trim();
+        const pubDate = $(el).find('pubDate').text().trim();
+        const rawDesc = $(el).find('description').text();
+        const description = cleanHtml(rawDesc);
+        const sourceName = cleanHtml($(el).find('source').text()) || feed.name;
+
+        // Extract image from description HTML <img> tag or <enclosure> or <media:content>
+        let imageUrl = null;
+        if (rawDesc) {
+          try {
+            const $desc = cheerio.load(rawDesc);
+            const imgSrc = $desc('img').first().attr('src');
+            if (imgSrc && imgSrc.startsWith('http')) {
+              imageUrl = imgSrc;
             }
-          } else if (data[0] === 'EOSE') {
-            cleanup();
+          } catch (_) {}
+        }
+        if (!imageUrl) {
+          const enclosureUrl = $(el).find('enclosure').attr('url');
+          if (enclosureUrl && enclosureUrl.startsWith('http')) {
+            imageUrl = enclosureUrl;
           }
-        } catch (_) {}
-      });
+        }
+        if (!imageUrl) {
+          const mediaUrl = $(el).find('media\\:content, content').attr('url');
+          if (mediaUrl && mediaUrl.startsWith('http')) {
+            imageUrl = mediaUrl;
+          }
+        }
 
-      ws.on('error', () => {
-        cleanup();
-      });
+        if (!title || !link) continue;
 
-      ws.on('close', () => {
-        if (timeoutId) clearTimeout(timeoutId);
-        resolve();
-      });
-    } catch (_) {
-      cleanup();
-    }
-  });
+        // Filter incoming XML items to ensure target keywords match
+        if (!TARGET_ENTITY_REGEX.test(title) && !TARGET_ENTITY_REGEX.test(description)) {
+          continue;
+        }
 
-  await Promise.allSettled(relays.map((r) => connectRelay(r)));
-
-  const notesArray = Array.from(collectedNotes.values());
-  const articles = [];
-
-  for (const event of notesArray) {
-    const text = cleanHtml(event.content);
-    const pubkeyShort = event.pubkey ? `${event.pubkey.slice(0, 8)}...` : 'anon';
-    const noteUrl = `https://njump.me/${event.id}`;
-    let thumb = null;
-
-    // Check if note contains an external link to enrich with Cheerio
-    const urlMatch = text.match(/https?:\/\/[^\s]+/i);
-    let enrichedContent = text;
-    if (urlMatch && urlMatch[0]) {
-      const enriched = await enrichSocialUrl(urlMatch[0]);
-      if (enriched) {
-        enrichedContent = `${text}\n\n[Linked Article]: ${enriched.title}${enriched.description ? ` — ${enriched.description}` : ''}`;
-        thumb = enriched.image;
+        aggregatedItems.push({
+          api_source: feed.api_source || (feed.name.includes('Google') ? 'Google RSS' : 'Publisher RSS'),
+          source_name: sourceName,
+          title,
+          url: link,
+          image_url: imageUrl,
+          raw_content: description || title,
+          published_at: pubDate ? new Date(pubDate).toISOString() : new Date().toISOString()
+        });
       }
+    } catch (feedErr) {
+      console.warn(`[Publisher RSS] ⚠️ ${feed.name} notice: ${feedErr.message}`);
     }
-
-    articles.push({
-      api_source: 'Nostr Relay Wire',
-      source_name: `nostr:${pubkeyShort}`,
-      title: text.length > 95 ? `${text.slice(0, 92)}...` : text,
-      url: noteUrl,
-      image_url: thumb,
-      raw_content: enrichedContent,
-      published_at: event.created_at ? new Date(event.created_at * 1000).toISOString() : new Date().toISOString()
-    });
   }
 
-  sourceTelemetry.nostr.lastStatus = 'Operational';
-  sourceTelemetry.nostr.lastCount = articles.length;
-  console.log(`[Nostr] ✅ Ingested ${articles.length} verified decentralized events across relays.`);
-  return articles;
+  const googleCount = aggregatedItems.filter(a => a.api_source === 'Google RSS').length;
+  const instCount = aggregatedItems.length - googleCount;
+
+  sourceTelemetry.googlenews.lastStatus = 'Operational';
+  sourceTelemetry.googlenews.lastCount = googleCount;
+  sourceTelemetry.institutional.lastStatus = 'Operational';
+  sourceTelemetry.institutional.lastCount = instCount;
+
+  console.log(`[Publisher RSS] ✅ Ingested ${aggregatedItems.length} verified articles (${googleCount} Google RSS, ${instCount} Institutional).`);
+  return aggregatedItems;
 }
 
-// Backward-compatibility alias for legacy callers
-export const fetchPublisherRss = fetchNostrStream;
+export const fetchRSSFeeds = fetchPublisherRss;
 
 // ============================================================================
 // 6. GNEWS API (Global AI-Curated News Index)
@@ -776,9 +768,10 @@ export async function fetchBlueskyFeed() {
         limit: 20
       },
       headers: {
-        'User-Agent': 'VeeAlert/1.0 (Enterprise Media Intelligence Platform)'
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36',
+        'Accept': 'application/json, text/plain, */*'
       },
-      timeout: 8000
+      timeout: 4000 // Strict 4s timeout per trial specification
     });
 
     if (response.data && Array.isArray(response.data.posts)) {
@@ -832,11 +825,11 @@ export async function fetchBlueskyFeed() {
 export const fetchBlueskySocial = fetchBlueskyFeed;
 
 // ============================================================================
-// 10. MASTER CONCURRENT MULTI-SOURCE AGGREGATOR (Pure API + Decentralized Firehoses)
+// 10. MASTER CONCURRENT MULTI-SOURCE AGGREGATOR (REST APIs + Verified RSS + Bluesky Trial)
 // ============================================================================
 /**
- * Queries 7 pure-API & decentralized firehoses concurrently using Promise.allSettled().
- * Completely eliminates slow RSS parsing in favor of high-velocity APIs and WebSocket streams.
+ * Queries verified REST APIs, whitelisted RSS feeds (Google News + Institutional),
+ * and the Bluesky AT Protocol trial concurrently using Promise.allSettled().
  *
  * @param {(payload: object) => Promise<any>} processIngestCallback
  * @returns {Promise<Array<object>>} Successfully ingested articles
@@ -851,25 +844,25 @@ export async function fetchMultiSourceNews(processIngestCallback) {
 
   const cycleTime = new Date().toLocaleTimeString('en-IN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
   console.log('\n================== [INGESTION CYCLE: ' + cycleTime + '] ==================');
-  console.log('⚡ [Multi-Source Engine] Commencing Concurrent 7-Stream Pure-API & Firehose Ingestion:');
+  console.log('⚡ [Multi-Source Engine] Commencing Concurrent 7-Source Ingestion:');
   console.log('   1. NewsAPI        (Global 24/7 Wire — sortBy=publishedAt)');
   console.log('   2. Currents API   (Global Live Stream — verified multi-lingual)');
   console.log('   3. GNews          (AI-Curated Global Index — sortby=publishedAt)');
   console.log('   4. NewsData.io    (Real-Time Archive — language=en)');
   console.log('   5. The Guardian   (Premium Wire — order=newest)');
-  console.log('   6. Bluesky Social (AT Protocol Decentralized HTTP Firehose)');
-  console.log('   7. Nostr Relays   (WebSocket Decentralized Wire: nos.lol, primal)');
+  console.log('   6. Publisher RSS  (Google News RSS + Economic Times Wires)');
+  console.log('   7. Bluesky Social (AT Protocol Decentralized HTTP Trial — 4s timeout)');
   console.log('=========================================================================');
 
-  // Execute all 7 pure-API & WebSocket firehoses concurrently with fault-isolation
+  // Execute all 7 sources concurrently with fault-isolation
   const results = await Promise.allSettled([
     fetchNewsApi(),
     fetchCurrentsNews(),
     fetchGNews(),
     fetchNewsData(),
     fetchGuardianNews(),
-    fetchBlueskyFeed(),
-    fetchNostrStream()
+    fetchPublisherRss(),
+    fetchBlueskyFeed()
   ]);
 
   const rawAggregatedArticles = [];
@@ -879,8 +872,8 @@ export async function fetchMultiSourceNews(processIngestCallback) {
     GNews: 0,
     NewsData: 0,
     'The Guardian API': 0,
-    'Bluesky Social': 0,
-    'Nostr Relay Wire': 0
+    'Publisher RSS': 0,
+    'Bluesky Social': 0
   };
 
   const sourceNames = [
@@ -889,8 +882,8 @@ export async function fetchMultiSourceNews(processIngestCallback) {
     'GNews',
     'NewsData',
     'The Guardian API',
-    'Bluesky Social',
-    'Nostr Relay Wire'
+    'Publisher RSS',
+    'Bluesky Social'
   ];
 
   results.forEach((result, idx) => {
@@ -909,8 +902,8 @@ export async function fetchMultiSourceNews(processIngestCallback) {
   console.log(
     `\n[Fetch Sources] NewsAPI: ${sourceCounts['NewsAPI']} | Currents: ${sourceCounts['Currents API']} | ` +
     `GNews: ${sourceCounts['GNews']} | NewsData: ${sourceCounts['NewsData']} | ` +
-    `Guardian: ${sourceCounts['The Guardian API']} | Bluesky: ${sourceCounts['Bluesky Social']} | ` +
-    `Nostr: ${sourceCounts['Nostr Relay Wire']}`
+    `Guardian: ${sourceCounts['The Guardian API']} | RSS: ${sourceCounts['Publisher RSS']} | ` +
+    `Bluesky: ${sourceCounts['Bluesky Social']}`
   );
   console.log(`[MultiSource] Aggregated ${rawAggregatedArticles.length} raw articles total. Starting dedup & triage...`);
 

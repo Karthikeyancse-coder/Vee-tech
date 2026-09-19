@@ -97,22 +97,6 @@ export async function hydrateSeenContentHashes() {
   }
 }
 
-// ============================================================================
-// SUPABASE REALTIME BROADCAST ENGINE ('crisis-war-room')
-// ============================================================================
-let warRoomChannel = null;
-
-export function getWarRoomChannel() {
-  if (!supabase) return null;
-  if (!warRoomChannel) {
-    warRoomChannel = supabase.channel('crisis-war-room');
-    warRoomChannel.subscribe((status) => {
-      console.log(`[Realtime Broadcast] 'crisis-war-room' channel status: ${status}`);
-    });
-  }
-  return warRoomChannel;
-}
-
 // In-Memory Fallback Caches (Maintains zero-lag operation if external DB is disconnected)
 const memoryArticles = [];
 const memoryAlertLogs = [];
@@ -770,24 +754,6 @@ export async function processIngest(payload) {
   // Record SHA-256 hash in memory to guarantee future O(1) deduplication
   seenContentHashes.add(contentHash);
 
-  // ZERO-OVERHEAD SUPABASE REALTIME BROADCAST FOR CRITICAL & HIGH ALERTS (<100ms in-memory)
-  if (supabase && (triage.risk_level === 'Critical' || triage.risk_level === 'High')) {
-    try {
-      console.log(`[Realtime Broadcast] 🚨 Dispatching broadcast alert to 'crisis-war-room' for [${triage.risk_level}] "${effectiveTitle.slice(0, 45)}..."`);
-      supabase.channel('crisis-war-room').send({
-        type: 'broadcast',
-        event: 'new_triaged_alert',
-        payload: insertedArticle
-      }).then(() => {
-        console.log(`[Realtime Broadcast] ⚡ Broadcast dispatched successfully to 'crisis-war-room'`);
-      }).catch((bErr) => {
-        console.warn('[Realtime Broadcast] ⚠️ Broadcast send notice:', bErr.message);
-      });
-    } catch (broadcastErr) {
-      console.warn('[Realtime Broadcast] ⚠️ Broadcast dispatch error:', broadcastErr.message);
-    }
-  }
-
   // Determine actual delivery vs skipped channels (Item 1 requirement)
   const dispatched_channels = [];
   const skipped_channels = [];
@@ -945,40 +911,31 @@ app.get('/api/sources', (_req, res) => {
       intervalSec: 60
     },
     {
-      id: 'bluesky',
-      name: 'Bluesky Social Wire (AT Protocol)',
-      type: 'AT Protocol',
-      configured: true,
-      provider: 'Bluesky Network',
-      category: 'Social Wire',
-      intervalSec: 45
-    },
-    {
-      id: 'nostr',
-      name: 'Nostr Relay Wire (Decentralized kind:1)',
-      type: 'WebSocket',
-      configured: true,
-      provider: 'Nostr Relays (nos.lol, primal.net, damus.io)',
-      category: 'Social Wire',
-      intervalSec: 45
-    },
-    {
       id: 'googlenews',
-      name: 'Google News RSS (Decommissioned)',
+      name: 'Google News RSS (Instant Wire)',
       type: 'XML Stream',
-      configured: false,
-      provider: 'Google News Syndicate (Decommissioned)',
+      configured: true,
+      provider: 'Google News Syndicate',
       category: 'Wire',
       intervalSec: 30
     },
     {
       id: 'institutional',
-      name: 'Institutional Publisher Wires (Decommissioned)',
+      name: 'Institutional Publisher Wires (ET, Mint, BS)',
       type: 'RSS/XML',
-      configured: false,
-      provider: 'Financial Wire Feeds (Decommissioned)',
+      configured: true,
+      provider: 'Financial Wire Feeds',
       category: 'Institutional',
       intervalSec: 30
+    },
+    {
+      id: 'bluesky',
+      name: 'Bluesky Social Wire (AT Protocol Trial)',
+      type: 'AT Protocol',
+      configured: true,
+      provider: 'Bluesky Network',
+      category: 'Social Wire',
+      intervalSec: 45
     },
     {
       id: 'gnews',
@@ -1189,7 +1146,7 @@ if (!isTestRun) {
     console.log(`📦 [Database] Supabase ${supabase ? 'Configured & Connected' : 'Not configured (In-memory fallback)'}`);
     console.log(`⚡ [SLA Target] Sub-120 seconds event-driven stream`);
     console.log(`🛡️ [Deduplicator] SHA-256 Pre-Database O(1) deduplication active`);
-    console.log(`📰 [News Sources] Pure-API 7-Stream Matrix (NewsAPI, Currents, GNews, NewsData, Guardian, Bluesky, Nostr)`);
+    console.log(`📰 [News Sources] Multi-Source Matrix (NewsAPI, Currents, GNews, NewsData, Guardian, Publisher RSS, Bluesky Trial)`);
     console.log(`⏱️ [Automated Ingestion] 45-second non-overlapping recursive engine active`);
     console.log(`=============================================================\n`);
 
@@ -1201,9 +1158,6 @@ if (!isTestRun) {
 
     // Hydrate source telemetry with most recent article timestamps from DB
     await initSourceTelemetryFromDb();
-
-    // Initialize Realtime war room broadcast channel
-    getWarRoomChannel();
 
     // Start the automated continuous ingestion engine on server boot
     startBackgroundIngestion();
