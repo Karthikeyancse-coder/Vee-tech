@@ -22,6 +22,9 @@ import {
   Image as ImageIcon
 } from 'lucide-react';
 import { Article } from '../hooks/useWarRoom';
+import { DetectionLatencyBadge } from './DetectionLatencyBadge';
+import { ArticleLifecycleTimeline } from './ArticleLifecycleTimeline';
+import { calculateAggregateLatencyMetrics } from '../utils/detectionLatency';
 
 interface CrisisWarRoomViewProps {
   articles: Article[];
@@ -132,7 +135,7 @@ export const CrisisWarRoomView: React.FC<CrisisWarRoomViewProps> = ({
   const [targetFilter, setTargetFilter] = useState('ALL');
   const [sourceFilter, setSourceFilter] = useState('All');
   const [timeFilter, setTimeFilter] = useState('All');
-  const [sortOrder, setSortOrder] = useState<'newest' | 'oldest'>('newest');
+  const [sortOrder, setSortOrder] = useState<'newest' | 'oldest' | 'fastest' | 'slowest'>('newest');
 
   // Expanded intelligence briefs state (mapped by article ID)
   const [expandedBriefs, setExpandedBriefs] = useState<Record<string, boolean>>({});
@@ -141,6 +144,15 @@ export const CrisisWarRoomView: React.FC<CrisisWarRoomViewProps> = ({
   const [scrolledDown, setScrolledDown] = useState(false);
   const [unseenCount, setUnseenCount] = useState(0);
   const previousArticlesCount = useRef(articles.length);
+
+  // Dynamic live ticker: automatically re-renders every 30s so relative times increment naturally without page reload
+  const [, setTick] = useState(0);
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setTick((t) => t + 1);
+    }, 30000);
+    return () => clearInterval(timer);
+  }, []);
 
   // Monitor user scroll position to avoid disrupting when reading
   useEffect(() => {
@@ -255,12 +267,12 @@ export const CrisisWarRoomView: React.FC<CrisisWarRoomViewProps> = ({
           }
         }
 
-        // Secondary time filter
+        // Secondary time filter based on when the news event was published
         const now = Date.now();
         let matchesTime = true;
 
         if (timeFilter !== 'All') {
-          const articleTime = new Date(article.ingested_at || article.published_at).getTime();
+          const articleTime = new Date(article.published_at || article.ingested_at).getTime();
           const diffHours = (now - articleTime) / (1000 * 60 * 60);
 
           if (timeFilter === '1h') matchesTime = diffHours <= 1;
@@ -271,13 +283,35 @@ export const CrisisWarRoomView: React.FC<CrisisWarRoomViewProps> = ({
         return matchesTime;
       })
       .sort((a, b) => {
+        if (sortOrder === 'fastest') {
+          const pubA = a.published_at ? new Date(a.published_at).getTime() : 0;
+          const detA = a.ingested_at ? new Date(a.ingested_at).getTime() : 0;
+          const latA = detA > 0 && pubA > 0 && detA >= pubA ? detA - pubA : Infinity;
+
+          const pubB = b.published_at ? new Date(b.published_at).getTime() : 0;
+          const detB = b.ingested_at ? new Date(b.ingested_at).getTime() : 0;
+          const latB = detB > 0 && pubB > 0 && detB >= pubB ? detB - pubB : Infinity;
+
+          return latA - latB;
+        }
+        if (sortOrder === 'slowest') {
+          const pubA = a.published_at ? new Date(a.published_at).getTime() : 0;
+          const detA = a.ingested_at ? new Date(a.ingested_at).getTime() : 0;
+          const latA = detA > 0 && pubA > 0 && detA >= pubA ? detA - pubA : -1;
+
+          const pubB = b.published_at ? new Date(b.published_at).getTime() : 0;
+          const detB = b.ingested_at ? new Date(b.ingested_at).getTime() : 0;
+          const latB = detB > 0 && pubB > 0 && detB >= pubB ? detB - pubB : -1;
+
+          return latB - latA;
+        }
         // Sort by the exact millisecond Vee-Alert ingested it
         const timeA = new Date(a.ingested_at || a.published_at).getTime();
         const timeB = new Date(b.ingested_at || b.published_at).getTime();
-        if (sortOrder.toLowerCase() === 'newest') {
-          return timeB - timeA; // Descending
+        if (sortOrder === 'oldest') {
+          return timeA - timeB;
         }
-        return timeA - timeB;
+        return timeB - timeA; // Descending (newest)
       });
   }, [articles, primaryFilter, searchFilter, severityFilter, targetFilter, sourceFilter, timeFilter, sortOrder]);
 
@@ -286,6 +320,29 @@ export const CrisisWarRoomView: React.FC<CrisisWarRoomViewProps> = ({
   const criticalCount = articles.filter((a) => a.risk_level === 'Critical').length;
   const highCount = articles.filter((a) => a.risk_level === 'High').length;
   const othersCount = Math.max(0, totalEvents - criticalCount - highCount);
+
+  // Detection Performance aggregate metrics across real timestamps in operational live window
+  const latencyMetrics = useMemo(() => {
+    return calculateAggregateLatencyMetrics(articles, {
+      maxLatencyHours: 24,
+      publishedWithinHours: 24,
+      scopeLabel: 'Last 24 hours'
+    });
+  }, [articles]);
+
+  // Section 29: Development-Only Diagnostics Logging
+  useEffect(() => {
+    if (import.meta.env?.DEV) {
+      const lowCount = articles.filter((a) => a.risk_level === 'Low').length;
+      const mediumCount = articles.filter((a) => a.risk_level === 'Medium').length;
+      console.log('\n--- [VEE-ALERT CRISIS WAR ROOM: LIVE DATA REFRESH] ---');
+      console.log(`Fetched / Total Events: ${articles.length}`);
+      console.log(`Severity Breakdown: Critical: ${criticalCount}, High: ${highCount}, Medium: ${mediumCount}, Low: ${lowCount}`);
+      console.log(`Live Velocity Evaluated: ${latencyMetrics.count} valid live articles (Avg: ${latencyMetrics.formattedAverage}, P95: ${latencyMetrics.formattedP95})`);
+      console.log(`Anomalies Excluded: ${latencyMetrics.anomalyCount}, Archival Records Excluded: ${latencyMetrics.archivalCount}`);
+      console.log('------------------------------------------------------\n');
+    }
+  }, [articles.length, criticalCount, highCount, latencyMetrics]);
 
   // Sidebar Analytics: Targets under watch
   const targetCounts = useMemo(() => {
@@ -454,11 +511,13 @@ export const CrisisWarRoomView: React.FC<CrisisWarRoomViewProps> = ({
         {/* Sort order */}
         <select
           value={sortOrder}
-          onChange={(e) => setSortOrder(e.target.value as 'newest' | 'oldest')}
+          onChange={(e) => setSortOrder(e.target.value as 'newest' | 'oldest' | 'fastest' | 'slowest')}
           className="h-8 px-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700 font-medium focus:outline-none cursor-pointer"
         >
-          <option value="newest">Sort: Newest</option>
-          <option value="oldest">Sort: Oldest</option>
+          <option value="newest">Sort: Newest Detected</option>
+          <option value="oldest">Sort: Oldest Detected</option>
+          <option value="fastest">Sort: Fastest Detection</option>
+          <option value="slowest">Sort: Slowest Detection</option>
         </select>
 
         {/* Clear All */}
@@ -479,9 +538,17 @@ export const CrisisWarRoomView: React.FC<CrisisWarRoomViewProps> = ({
           {filteredArticles.length === 0 ? (
             <div className="text-center py-16 bg-white border border-slate-200/80 rounded-xl p-8 shadow-2xs">
               <ShieldAlert className="w-10 h-10 text-slate-400 mx-auto mb-3" />
-              <p className="text-base font-semibold text-slate-800">No active incidents matching filters</p>
+              <p className="text-base font-semibold text-slate-800">
+                {primaryFilter === 'critical'
+                  ? 'No active critical incidents matching filters'
+                  : primaryFilter === 'infosys'
+                  ? 'No current Infosys events matching filters'
+                  : 'No active incidents matching filters'}
+              </p>
               <p className="text-xs text-slate-500 mt-1">
-                Adjust the search query or click &quot;Clear All&quot; to restore the full live stream.
+                {primaryFilter === 'critical' && criticalCount === 0
+                  ? 'Zero critical incidents currently detected by local AI triage engine.'
+                  : 'Adjust the search query or click "Clear All" to restore the full live stream.'}
               </p>
             </div>
           ) : (
@@ -620,7 +687,7 @@ export const CrisisWarRoomView: React.FC<CrisisWarRoomViewProps> = ({
 
                           <span className="text-slate-300">•</span>
                           <span className="flex items-center gap-1 text-emerald-700 font-medium">
-                            <Clock className="w-3 h-3 text-emerald-500" />
+                            <Clock className="w-3.5 h-3.5 text-emerald-500" />
                             Detected {detectedTime}
                           </span>
                           <span className="text-slate-300">·</span>
@@ -651,6 +718,14 @@ export const CrisisWarRoomView: React.FC<CrisisWarRoomViewProps> = ({
                             </span>
                           )}
                         </div>
+                      </div>
+
+                      {/* Dedicated Detection Latency Section */}
+                      <div className="pt-0.5 pb-1">
+                        <DetectionLatencyBadge
+                          publishedAt={article.published_at}
+                          detectedAt={article.ingested_at}
+                        />
                       </div>
 
                       {/* Headline (Clamped to 2 lines, 17-18px) */}
@@ -711,6 +786,14 @@ export const CrisisWarRoomView: React.FC<CrisisWarRoomViewProps> = ({
                                 <li>Real-time event recorded into central memory store.</li>
                               )}
                             </ul>
+
+                            {/* Authentic Article Lifecycle Timeline */}
+                            <ArticleLifecycleTimeline
+                              publishedAt={article.published_at}
+                              detectedAt={article.ingested_at}
+                              triagedAt={article.triaged_at}
+                              dispatchedAt={article.dispatched_at || article.alerted_at}
+                            />
                           </div>
                         )}
                       </div>
@@ -795,6 +878,41 @@ export const CrisisWarRoomView: React.FC<CrisisWarRoomViewProps> = ({
                 <div className="text-[11px] text-slate-500 font-medium">Others</div>
                 <div className="text-xl font-bold text-slate-700 mt-0.5 font-mono">{othersCount}</div>
               </div>
+            </div>
+          </div>
+
+          {/* Card 2: Detection Performance (Real Timestamps in Live Window) */}
+          <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-2xs space-y-3">
+            <div className="flex items-center justify-between pb-1 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <Clock className="w-4 h-4 text-emerald-600" />
+                <div>
+                  <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wide">Detection Velocity</h3>
+                  <p className="text-[10px] text-slate-400">Live Window ({latencyMetrics.scopeLabel})</p>
+                </div>
+              </div>
+              <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 border border-emerald-200 font-mono">
+                ≤ 2m Target
+              </span>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2.5 pt-1">
+              <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100">
+                <div className="text-[11px] text-slate-500 font-medium">Avg Detection</div>
+                <div className="text-lg font-bold text-slate-900 mt-0.5 font-mono">
+                  {latencyMetrics.formattedAverage}
+                </div>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100">
+                <div className="text-[11px] text-slate-500 font-medium">P95 Detection</div>
+                <div className="text-lg font-bold text-slate-900 mt-0.5 font-mono">
+                  {latencyMetrics.formattedP95}
+                </div>
+              </div>
+            </div>
+            <div className="text-[10px] text-slate-400 font-mono text-center">
+              Evaluated across {latencyMetrics.count} valid live articles
+              {latencyMetrics.archivalCount > 0 && ` (${latencyMetrics.archivalCount} archival excluded)`}
             </div>
           </div>
 

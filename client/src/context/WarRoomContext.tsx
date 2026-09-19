@@ -151,85 +151,76 @@ export const WarRoomProvider: React.FC<{ children: ReactNode }> = ({ children })
 
     fetchArticles(true);
 
-    let pollingInterval: ReturnType<typeof setInterval> | null = null;
+    let backgroundSyncInterval: ReturnType<typeof setInterval> | null = null;
     let channel: any = null;
 
-    const startFallbackPolling = () => {
-      if (!pollingInterval) {
-        console.log('[WarRoomProvider] Engaging 10s fallback polling check...');
-        pollingInterval = setInterval(() => {
-          fetchArticles(false);
-        }, 10000);
-      }
-    };
+    // Continuous 15s background sync ensures new events always arrive even if Supabase Realtime blips
+    backgroundSyncInterval = setInterval(() => {
+      fetchArticles(false);
+    }, 15000);
 
-    const stopFallbackPolling = () => {
-      if (pollingInterval) {
-        clearInterval(pollingInterval);
-        pollingInterval = null;
-      }
-    };
-
-    if (!isSupabaseConfigured || !supabase) {
-      console.warn('[WarRoomProvider] Supabase client not direct; running fallback polling.');
-      startFallbackPolling();
-      return () => stopFallbackPolling();
-    }
-
-    try {
-      // Connect to singleton Realtime channel for Postgres changes
-      channel = supabase
-        .channel('public:articles')
-        .on(
-          'postgres_changes',
-          {
-            event: 'INSERT',
-            schema: 'public',
-            table: 'articles'
-          },
-          (payload) => {
-            console.log('🔥 LIVE ARTICLE RECEIVED:', payload.new.title);
-            setArticles((currentArticles) => {
-              if (currentArticles.some((article) => article.id === payload.new.id)) {
-                return currentArticles;
+    if (isSupabaseConfigured && supabase) {
+      try {
+        // Connect to singleton Realtime channel for Postgres changes
+        channel = supabase
+          .channel('public:articles')
+          .on(
+            'postgres_changes',
+            {
+              event: 'INSERT',
+              schema: 'public',
+              table: 'articles'
+            },
+            (payload) => {
+              const newArt = payload.new as Article;
+              if (import.meta.env?.DEV) {
+                console.log('🔥 [Supabase Realtime INSERT Received]:', newArt.title);
               }
-              return [payload.new as Article, ...currentArticles];
-            });
-          }
-        )
-        .on(
-          'postgres_changes',
-          {
-            event: 'UPDATE',
-            schema: 'public',
-            table: 'articles'
-          },
-          (payload) => {
-            const updated = payload.new as Article;
-            console.log('🔄 [Supabase Realtime UPDATE Received]:', updated.id, updated.status);
-            setArticles((prev) =>
-              prev.map((item) => (item.id === updated.id ? { ...item, ...updated } : item))
-            );
-          }
-        )
-        .subscribe((status) => {
-          console.log(`[Supabase Realtime Status]: ${status}`);
-          if (status === 'SUBSCRIBED') {
-            setIsRealtimeActive(true);
-            stopFallbackPolling();
-          } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
-            setIsRealtimeActive(false);
-            console.warn(`[Supabase Realtime] Status is ${status}. Activating fallback polling.`);
-            startFallbackPolling();
-          }
-        });
-    } catch (channelErr: any) {
-      console.error('[WarRoomProvider] Failed to initialize Realtime channel:', channelErr.message);
-      startFallbackPolling();
+              setArticles((currentArticles) => {
+                if (currentArticles.some((article) => article.id === newArt.id)) {
+                  return currentArticles;
+                }
+                return [newArt, ...currentArticles];
+              });
+            }
+          )
+          .on(
+            'postgres_changes',
+            {
+              event: 'UPDATE',
+              schema: 'public',
+              table: 'articles'
+            },
+            (payload) => {
+              const updated = payload.new as Article;
+              if (import.meta.env?.DEV) {
+                console.log('🔄 [Supabase Realtime UPDATE Received]:', updated.id, updated.status);
+              }
+              setArticles((prev) =>
+                prev.map((item) => (item.id === updated.id ? { ...item, ...updated } : item))
+              );
+            }
+          )
+          .subscribe((status) => {
+            if (import.meta.env?.DEV) {
+              console.log(`[Supabase Realtime Status]: ${status}`);
+            }
+            if (status === 'SUBSCRIBED') {
+              setIsRealtimeActive(true);
+            } else if (status === 'CHANNEL_ERROR' || status === 'TIMED_OUT' || status === 'CLOSED') {
+              setIsRealtimeActive(false);
+            }
+          });
+      } catch (channelErr: any) {
+        console.warn('[WarRoomProvider] Realtime channel init notice:', channelErr.message);
+      }
     }
 
     return () => {
-      stopFallbackPolling();
+      if (backgroundSyncInterval) {
+        clearInterval(backgroundSyncInterval);
+        backgroundSyncInterval = null;
+      }
       if (channel && supabase) {
         supabase.removeChannel(channel);
       }

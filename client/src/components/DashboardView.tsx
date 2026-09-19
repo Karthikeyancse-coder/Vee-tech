@@ -13,6 +13,7 @@ import {
   Server
 } from 'lucide-react';
 import { Article } from '../hooks/useWarRoom';
+import { DetectionLatencyBadge } from './DetectionLatencyBadge';
 
 interface DashboardViewProps {
   articles: Article[];
@@ -564,13 +565,18 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
                       </div>
                     </div>
 
-                    {/* 3. Footer / Risk Badge Aligned to Bottom Left */}
-                    <div className="px-4 pb-4 pt-1">
+                    {/* 3. Footer / Risk Badge Aligned to Bottom Left + Latency Badge */}
+                    <div className="px-4 pb-4 pt-1 flex items-center justify-between gap-2 flex-wrap">
                       <span
                         className={`inline-block text-[11px] font-bold px-2 py-0.5 rounded border font-mono tracking-wide ${riskBadgeClass}`}
                       >
                         {level.toUpperCase()} {scoreValue}/10
                       </span>
+                      <DetectionLatencyBadge
+                        publishedAt={article.published_at}
+                        detectedAt={article.ingested_at}
+                        variant="inline"
+                      />
                     </div>
                   </div>
                 );

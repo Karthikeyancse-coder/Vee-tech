@@ -2,6 +2,8 @@ import React from 'react';
 import { X, ExternalLink, PhoneCall, Check, Clock, Newspaper, ShieldAlert } from 'lucide-react';
 import { formatDistanceToNow } from 'date-fns';
 import { Article } from '../hooks/useWarRoom';
+import { DetectionLatencyBadge } from './DetectionLatencyBadge';
+import { ArticleLifecycleTimeline } from './ArticleLifecycleTimeline';
 
 interface ArticleModalProps {
   article: Article | null;
@@ -99,6 +101,14 @@ export const ArticleModal: React.FC<ArticleModalProps> = ({
               {relativeTime}
             </span>
           </div>
+
+          {/* Detection Latency Section */}
+          <div className="pt-2">
+            <DetectionLatencyBadge
+              publishedAt={article.published_at}
+              detectedAt={article.ingested_at}
+            />
+          </div>
         </div>
 
         {/* 5-Bullet Intelligence Brief */}
@@ -119,6 +129,14 @@ export const ArticleModal: React.FC<ArticleModalProps> = ({
               </li>
             )}
           </ul>
+
+          {/* Article Lifecycle Timeline */}
+          <ArticleLifecycleTimeline
+            publishedAt={article.published_at}
+            detectedAt={article.ingested_at}
+            triagedAt={article.triaged_at}
+            dispatchedAt={article.dispatched_at || article.alerted_at}
+          />
         </div>
 
         {/* Full Raw Content Extract */}
