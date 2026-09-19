@@ -450,7 +450,134 @@ export async function fetchPublisherRss() {
 }
 
 // ============================================================================
-// 6. MASTER CONCURRENT MULTI-SOURCE AGGREGATOR
+// 6. GNEWS API (Global AI-Curated News Index)
+// ============================================================================
+/**
+ * Fetches articles from GNews — a premium real-time global news index.
+ * Gated on GNEWS_API_KEY; skips cleanly if not configured.
+ *
+ * @returns {Promise<Array<object>>} Normalized article array
+ */
+export async function fetchGNews() {
+  const apiKey = (process.env.GNEWS_API_KEY || '').trim();
+
+  if (!apiKey) {
+    console.log('[GNews] GNEWS_API_KEY not configured in .env; skipping source.');
+    return [];
+  }
+
+  const strictQuery = '(Infosys OR "Tata Consultancy Services" OR Wipro OR Accenture)';
+  console.log(`[GNews] Querying global AI-curated news index (sortby=publishedAt)...`);
+
+  try {
+    const response = await axios.get('https://gnews.io/api/v4/search', {
+      params: {
+        q: strictQuery,
+        lang: 'en',
+        sortby: 'publishedAt',
+        max: 10,
+        apikey: apiKey
+      },
+      headers: {
+        'User-Agent': 'VeeAlert/1.0 (Enterprise Intelligence Platform)',
+        'Cache-Control': 'no-cache, no-store, must-revalidate'
+      },
+      timeout: 12000
+    });
+
+    if (response.data && Array.isArray(response.data.articles)) {
+      const articles = response.data.articles
+        .filter((item) => item.title && item.url)
+        .map((item) => ({
+          api_source: 'GNews',
+          source_name: item.source?.name || 'GNews Global Wire',
+          title: cleanHtml(item.title),
+          url: item.url,
+          image_url: item.image || null,
+          raw_content: cleanHtml(item.description || item.content || item.title),
+          published_at: item.publishedAt ? new Date(item.publishedAt).toISOString() : new Date().toISOString()
+        }));
+
+      console.log(`[GNews] ✅ Returned ${articles.length} articles.`);
+      return articles;
+    }
+    return [];
+  } catch (error) {
+    if (error.response?.status === 429 || error.response?.status === 401 || error.response?.status === 403) {
+      console.warn(`[GNews] ⚠️ API unavailable or rate limited. (HTTP ${error.response.status})`);
+    } else {
+      console.warn(`[GNews] ⚠️ API unavailable or rate limited. (${error.message})`);
+    }
+    return [];
+  }
+}
+
+// ============================================================================
+// 7. NEWSDATA.IO (Real-Time News Archive)
+// ============================================================================
+/**
+ * Fetches articles from NewsData.io — a real-time global news archive API.
+ * Gated on NEWSDATA_API_KEY; skips cleanly if not configured.
+ * Field mapping: `link` → url, `pubDate` → published_at, `source_id` → source_name.
+ *
+ * @returns {Promise<Array<object>>} Normalized article array
+ */
+export async function fetchNewsData() {
+  const apiKey = (process.env.NEWSDATA_API_KEY || '').trim();
+
+  if (!apiKey) {
+    console.log('[NewsData] NEWSDATA_API_KEY not configured in .env; skipping source.');
+    return [];
+  }
+
+  const strictQuery = '(Infosys OR TCS OR Wipro OR Accenture)';
+  console.log(`[NewsData] Querying NewsData.io real-time archive...`);
+
+  try {
+    const response = await axios.get('https://newsdata.io/api/1/news', {
+      params: {
+        q: strictQuery,
+        language: 'en',
+        apikey: apiKey
+      },
+      headers: {
+        'User-Agent': 'VeeAlert/1.0 (Enterprise Intelligence Platform)',
+        'Cache-Control': 'no-cache, no-store, must-revalidate'
+      },
+      timeout: 12000
+    });
+
+    if (response.data && Array.isArray(response.data.results)) {
+      const articles = response.data.results
+        .filter((item) => item.title && item.link)
+        .map((item) => ({
+          api_source: 'NewsData',
+          source_name: item.source_id || 'NewsData Wire',
+          title: cleanHtml(item.title),
+          url: item.link,                              // NewsData uses `link`, not `url`
+          image_url: item.image_url || null,
+          raw_content: cleanHtml(item.description || item.content || item.title),
+          published_at: item.pubDate                   // NewsData uses `pubDate`
+            ? new Date(item.pubDate).toISOString()
+            : new Date().toISOString()
+        }));
+
+      console.log(`[NewsData] ✅ Returned ${articles.length} articles.`);
+      return articles;
+    }
+    return [];
+  } catch (error) {
+    if (error.response?.status === 429 || error.response?.status === 401 || error.response?.status === 403) {
+      console.warn(`[NewsData] ⚠️ API unavailable or rate limited. (HTTP ${error.response.status})`);
+    } else {
+      console.warn(`[NewsData] ⚠️ API unavailable or rate limited. (${error.message})`);
+    }
+    return [];
+  }
+}
+
+// ============================================================================
+// 8. MASTER CONCURRENT MULTI-SOURCE AGGREGATOR
 // ============================================================================
 /**
  * Queries all 5 sources concurrently using Promise.allSettled().
@@ -470,26 +597,37 @@ export async function fetchMultiSourceNews(processIngestCallback) {
 
   const cycleTime = new Date().toLocaleTimeString('en-IN', { hour12: false, hour: '2-digit', minute: '2-digit', second: '2-digit' });
   console.log('\n================== [INGESTION CYCLE: ' + cycleTime + '] ==================');
-  console.log('⚡ [Multi-Source Engine] Commencing Concurrent 4-Source Ingestion:');
+  console.log('⚡ [Multi-Source Engine] Commencing Concurrent 6-Source Ingestion:');
   console.log('   1. NewsAPI        (Global 24/7 Wire — sortBy=publishedAt)');
   console.log('   2. GDELT DOC 2.0  (Global Discovery — timespan=2h, sort=datedesc)');
   console.log('   3. The Guardian   (Premium Wire — order=newest)');
   console.log('   4. Publisher RSS  (ET + Google News — when:4h + cache-bust)');
+  console.log('   5. GNews          (AI-Curated Global Index — sortby=publishedAt)');
+  console.log('   6. NewsData.io    (Real-Time Archive — language=en)');
   console.log('=================================================================');
 
-  // Execute all 4 fetchers concurrently with fault-isolation via Promise.allSettled
+  // Execute all 6 fetchers concurrently with fault-isolation via Promise.allSettled
   const results = await Promise.allSettled([
     fetchNewsApi(),
     fetchGdeltDoc(),
     fetchGuardianNews(),
-    fetchPublisherRss()
+    fetchPublisherRss(),
+    fetchGNews(),
+    fetchNewsData()
   ]);
 
   const rawAggregatedArticles = [];
-  const sourceCounts = { NewsAPI: 0, 'GDELT DOC': 0, 'The Guardian API': 0, 'Publisher RSS': 0 };
+  const sourceCounts = {
+    NewsAPI: 0,
+    'GDELT DOC': 0,
+    'The Guardian API': 0,
+    'Publisher RSS': 0,
+    GNews: 0,
+    NewsData: 0
+  };
 
   results.forEach((result, idx) => {
-    const sourceNames = ['NewsAPI', 'GDELT DOC', 'The Guardian API', 'Publisher RSS'];
+    const sourceNames = ['NewsAPI', 'GDELT DOC', 'The Guardian API', 'Publisher RSS', 'GNews', 'NewsData'];
     const name = sourceNames[idx];
     if (result.status === 'fulfilled' && Array.isArray(result.value)) {
       sourceCounts[name] = result.value.length;
@@ -502,7 +640,11 @@ export async function fetchMultiSourceNews(processIngestCallback) {
     }
   });
 
-  console.log(`\n[Fetch Sources] NewsAPI: ${sourceCounts['NewsAPI']} | GDELT: ${sourceCounts['GDELT DOC']} | Guardian: ${sourceCounts['The Guardian API']} | RSS: ${sourceCounts['Publisher RSS']}`);
+  console.log(
+    `\n[Fetch Sources] NewsAPI: ${sourceCounts['NewsAPI']} | GDELT: ${sourceCounts['GDELT DOC']} | ` +
+    `Guardian: ${sourceCounts['The Guardian API']} | RSS: ${sourceCounts['Publisher RSS']} | ` +
+    `GNews: ${sourceCounts['GNews']} | NewsData: ${sourceCounts['NewsData']}`
+  );
   console.log(`[MultiSource] Aggregated ${rawAggregatedArticles.length} raw articles total. Starting dedup & triage...`);
 
   const ingestedArticles = [];
