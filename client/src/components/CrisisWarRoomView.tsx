@@ -1,0 +1,872 @@
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { formatDistanceToNow } from 'date-fns';
+import {
+  PhoneCall,
+  Check,
+  ExternalLink,
+  ShieldAlert,
+  Clock,
+  Newspaper,
+  ChevronDown,
+  ChevronUp,
+  Search,
+  SlidersHorizontal,
+  TrendingUp,
+  Activity,
+  CheckCircle2,
+  Server,
+  Database,
+  Cpu,
+  Radio,
+  ArrowDown,
+  Image as ImageIcon
+} from 'lucide-react';
+import { Article } from '../hooks/useWarRoom';
+
+interface CrisisWarRoomViewProps {
+  articles: Article[];
+  onAcknowledge: (id: string) => void;
+  onEscalateVoice: (article: Article) => void;
+  loading: boolean;
+}
+
+// Source Brand Badges
+const getSourceBadge = (sourceName: string) => {
+  const s = (sourceName || '').toLowerCase();
+  if (s.includes('economic') || s.includes('et')) {
+    return { tag: 'ET', bg: 'bg-[#C81E3A]', text: 'text-white' };
+  }
+  if (s.includes('fortune') || s.includes('fi')) {
+    return { tag: 'FI', bg: 'bg-[#0F172A]', text: 'text-white' };
+  }
+  if (s.includes('business today') || s.includes('bt')) {
+    return { tag: 'BT', bg: 'bg-[#2563EB]', text: 'text-white' };
+  }
+  if (s.includes('times of india') || s.includes('toi')) {
+    return { tag: 'TOI', bg: 'bg-[#DC2626]', text: 'text-white' };
+  }
+  if (s.includes('business standard') || s.includes('bs')) {
+    return { tag: 'BS', bg: 'bg-[#4B5563]', text: 'text-white' };
+  }
+  if (s.includes('livemint') || s.includes('mint')) {
+    return { tag: 'LM', bg: 'bg-[#EA580C]', text: 'text-white' };
+  }
+  if (s.includes('cnbc')) {
+    return { tag: 'CN', bg: 'bg-[#0284C7]', text: 'text-white' };
+  }
+  if (s.includes('ndtv')) {
+    return { tag: 'ND', bg: 'bg-[#E11D48]', text: 'text-white' };
+  }
+  if (s.includes('reuters')) {
+    return { tag: 'RE', bg: 'bg-[#EA580C]', text: 'text-white' };
+  }
+  if (s.includes('bloomberg')) {
+    return { tag: 'BL', bg: 'bg-[#1E1B4B]', text: 'text-white' };
+  }
+  if (s.includes('guardian')) {
+    return { tag: 'GU', bg: 'bg-[#052962]', text: 'text-white' };
+  }
+  if (s.includes('market') || s.includes('trader')) {
+    return { tag: 'MK', bg: 'bg-[#1E40AF]', text: 'text-white' };
+  }
+  return {
+    tag: sourceName ? sourceName.slice(0, 2).toUpperCase() : 'NW',
+    bg: 'bg-slate-700',
+    text: 'text-white'
+  };
+};
+
+// High-fidelity fallback imagery if RSS feed did not deliver an og:image tag
+const getThumbnailForArticle = (article: Article, index: number): string => {
+  if (article.image_url && String(article.image_url).startsWith('http')) {
+    return article.image_url;
+  }
+  const text = `${article.title} ${article.entity_mentioned} ${article.raw_content}`.toLowerCase();
+
+  // 1. Semiconductor / Hardware / AI Chip
+  if (text.includes('semiconductor') || text.includes('chip') || text.includes('hardware')) {
+    return 'https://images.unsplash.com/photo-1518770660439-4636190af475?w=500&auto=format&fit=crop&q=80';
+  }
+  // 2. TCS Facility / Campus
+  if (text.includes('tcs') || text.includes('tata consultancy') || text.includes('tata')) {
+    return 'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?w=500&auto=format&fit=crop&q=80';
+  }
+  // 3. Wipro Corporate Office
+  if (text.includes('wipro') || text.includes('sto360') || text.includes('aramco')) {
+    return 'https://images.unsplash.com/photo-1497215728101-856f4ea42174?w=500&auto=format&fit=crop&q=80';
+  }
+  // 4. Accenture Enterprise
+  if (text.includes('accenture') || text.includes('guggenheim') || text.includes('downgrade')) {
+    return 'https://images.unsplash.com/photo-1497366216548-37526070297c?w=500&auto=format&fit=crop&q=80';
+  }
+  // 5. Infosys Campus / Building / Finacle Banking
+  if (text.includes('infosys') || text.includes('finacle') || text.includes('banking') || text.includes('audit')) {
+    return index % 2 === 0
+      ? 'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?w=500&auto=format&fit=crop&q=80'
+      : 'https://images.unsplash.com/photo-1554469384-e58fac16e23a?w=500&auto=format&fit=crop&q=80';
+  }
+  // 6. Markets / Stocks / Trading
+  if (text.includes('stock') || text.includes('shares') || text.includes('earnings') || text.includes('nifty')) {
+    return 'https://images.unsplash.com/photo-1611974789855-9c2a0a7236a3?w=500&auto=format&fit=crop&q=80';
+  }
+  // 7. Real Estate / Housing
+  if (text.includes('housing') || text.includes('redevelopment') || text.includes('mumbai') || text.includes('puravankara')) {
+    return 'https://images.unsplash.com/photo-1545324418-cc1a3fa10c00?w=500&auto=format&fit=crop&q=80';
+  }
+  // Default Enterprise Tech
+  return 'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?w=500&auto=format&fit=crop&q=80';
+};
+
+export const CrisisWarRoomView: React.FC<CrisisWarRoomViewProps> = ({
+  articles,
+  onAcknowledge,
+  onEscalateVoice,
+  loading
+}) => {
+  // Primary Tabs Filter: 'all' | 'critical' | 'infosys'
+  const [primaryFilter, setPrimaryFilter] = useState<'all' | 'critical' | 'infosys'>('all');
+
+  // Secondary Filter States
+  const [searchFilter, setSearchFilter] = useState('');
+  const [severityFilter, setSeverityFilter] = useState('ALL');
+  const [targetFilter, setTargetFilter] = useState('ALL');
+  const [sourceFilter, setSourceFilter] = useState('ALL');
+  const [timeFilter, setTimeFilter] = useState('All');
+  const [sortOrder, setSortOrder] = useState<'newest' | 'oldest'>('newest');
+
+  // Expanded intelligence briefs state (mapped by article ID)
+  const [expandedBriefs, setExpandedBriefs] = useState<Record<string, boolean>>({});
+
+  // Real-time new events notification tracking
+  const [scrolledDown, setScrolledDown] = useState(false);
+  const [unseenCount, setUnseenCount] = useState(0);
+  const previousArticlesCount = useRef(articles.length);
+
+  // Monitor user scroll position to avoid disrupting when reading
+  useEffect(() => {
+    const handleScroll = () => {
+      const isDown = window.scrollY > 250;
+      setScrolledDown(isDown);
+      if (!isDown) {
+        setUnseenCount(0);
+      }
+    };
+    window.addEventListener('scroll', handleScroll, { passive: true });
+    return () => window.removeEventListener('scroll', handleScroll);
+  }, []);
+
+  // Detect newly arriving WebSocket articles while scrolled down
+  useEffect(() => {
+    if (articles.length > previousArticlesCount.current) {
+      const added = articles.length - previousArticlesCount.current;
+      if (scrolledDown) {
+        setUnseenCount((prev) => prev + added);
+      }
+    }
+    previousArticlesCount.current = articles.length;
+  }, [articles.length, scrolledDown]);
+
+  const scrollToTop = () => {
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+    setUnseenCount(0);
+  };
+
+  const toggleBrief = (id: string) => {
+    setExpandedBriefs((prev) => ({
+      ...prev,
+      [id]: !prev[id]
+    }));
+  };
+
+  const clearAllFilters = () => {
+    setPrimaryFilter('all');
+    setSearchFilter('');
+    setSeverityFilter('ALL');
+    setTargetFilter('ALL');
+    setSourceFilter('ALL');
+    setTimeFilter('All');
+    setSortOrder('newest');
+  };
+
+  // Derive unique entities and sources for dropdowns
+  const availableEntities = useMemo(() => {
+    const set = new Set<string>();
+    articles.forEach((a) => {
+      if (a.entity_mentioned) set.add(a.entity_mentioned);
+    });
+    return Array.from(set).sort();
+  }, [articles]);
+
+  const availableSources = useMemo(() => {
+    const set = new Set<string>();
+    articles.forEach((a) => {
+      if (a.source_name) set.add(a.source_name);
+    });
+    return Array.from(set).sort();
+  }, [articles]);
+
+  // Main filtered & sorted stream
+  const filteredArticles = useMemo(() => {
+    return articles
+      .filter((article) => {
+        // Primary pill
+        if (primaryFilter === 'critical' && article.risk_level !== 'Critical') return false;
+        if (primaryFilter === 'infosys' && !article.entity_mentioned?.toLowerCase().includes('infosys')) return false;
+
+        // Secondary search
+        if (searchFilter.trim()) {
+          const q = searchFilter.toLowerCase();
+          const matches =
+            article.title.toLowerCase().includes(q) ||
+            article.entity_mentioned?.toLowerCase().includes(q) ||
+            article.source_name?.toLowerCase().includes(q) ||
+            article.raw_content?.toLowerCase().includes(q);
+          if (!matches) return false;
+        }
+
+        // Secondary severity
+        if (severityFilter !== 'ALL' && article.risk_level !== severityFilter) return false;
+
+        // Secondary target
+        if (targetFilter !== 'ALL' && article.entity_mentioned !== targetFilter) return false;
+
+        // Secondary source
+        if (sourceFilter !== 'ALL' && article.source_name !== sourceFilter) return false;
+
+        // Secondary time filter
+        const now = Date.now();
+        let matchesTime = true;
+
+        if (timeFilter !== 'All') {
+          const articleTime = new Date(article.ingested_at || article.published_at).getTime();
+          const diffHours = (now - articleTime) / (1000 * 60 * 60);
+
+          if (timeFilter === '1h') matchesTime = diffHours <= 1;
+          else if (timeFilter === '24h') matchesTime = diffHours <= 24;
+          else if (timeFilter === '7d') matchesTime = diffHours <= 168;
+        }
+
+        return matchesTime;
+      })
+      .sort((a, b) => {
+        // Sort by the exact millisecond Vee-Alert ingested it
+        const timeA = new Date(a.ingested_at || a.published_at).getTime();
+        const timeB = new Date(b.ingested_at || b.published_at).getTime();
+        if (sortOrder.toLowerCase() === 'newest') {
+          return timeB - timeA; // Descending
+        }
+        return timeA - timeB;
+      });
+  }, [articles, primaryFilter, searchFilter, severityFilter, targetFilter, sourceFilter, timeFilter, sortOrder]);
+
+  // Sidebar Analytics: Live Overview metrics
+  const totalEvents = articles.length;
+  const criticalCount = articles.filter((a) => a.risk_level === 'Critical').length;
+  const highCount = articles.filter((a) => a.risk_level === 'High').length;
+  const othersCount = Math.max(0, totalEvents - criticalCount - highCount);
+
+  // Sidebar Analytics: Targets under watch
+  const targetCounts = useMemo(() => {
+    const counts: Record<string, number> = {
+      Infosys: 0,
+      TCS: 0,
+      Wipro: 0,
+      Accenture: 0
+    };
+    articles.forEach((a) => {
+      const ent = a.entity_mentioned;
+      if (ent && counts[ent] !== undefined) {
+        counts[ent]++;
+      } else if (ent) {
+        counts[ent] = (counts[ent] || 0) + 1;
+      }
+    });
+    return counts;
+  }, [articles]);
+
+  if (loading && articles.length === 0) {
+    return (
+      <div className="flex flex-col items-center justify-center py-24 text-slate-400">
+        <div className="w-8 h-8 border-2 border-rose-600 border-t-transparent rounded-full animate-spin mb-4" />
+        <p className="text-sm font-medium text-slate-600">Connecting to Supabase Realtime Crisis Stream...</p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="w-full max-w-[1600px] mx-auto pb-16 space-y-6">
+      {/* Floating New Events Notification Toast */}
+      {unseenCount > 0 && scrolledDown && (
+        <button
+          onClick={scrollToTop}
+          className="fixed top-20 left-1/2 -translate-x-1/2 z-50 flex items-center gap-2 px-4 py-2 bg-slate-950 text-white border border-slate-800 rounded-full shadow-xl text-xs font-semibold hover:bg-slate-900 transition-all cursor-pointer animate-bounce"
+        >
+          <ArrowDown className="w-3.5 h-3.5 text-rose-500" />
+          <span>↓ {unseenCount} New Incoming Events</span>
+        </button>
+      )}
+
+      {/* 1. Page Header & Live Badge */}
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-slate-200/80 pb-4">
+        <div>
+          <div className="flex items-center gap-2.5">
+            <h1 className="text-2xl font-bold text-slate-900 tracking-tight font-sans">
+              Crisis War Room Feed
+            </h1>
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-50 text-emerald-700 border border-emerald-200 uppercase tracking-wider">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+              LIVE
+            </span>
+          </div>
+          <p className="text-xs text-slate-500 mt-1">
+            Real-time event stream triaged in-memory with sub-120 second SLA guarantee.
+          </p>
+        </div>
+
+        {/* Primary Filter Pills */}
+        <div className="flex items-center gap-1 bg-white border border-slate-200 p-1 rounded-lg shadow-2xs self-start md:self-auto">
+          <button
+            onClick={() => setPrimaryFilter('all')}
+            className={`px-3.5 py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${
+              primaryFilter === 'all'
+                ? 'bg-slate-900 text-white shadow-2xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+            }`}
+          >
+            All Stream ({articles.length})
+          </button>
+          <button
+            onClick={() => setPrimaryFilter('critical')}
+            className={`px-3.5 py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${
+              primaryFilter === 'critical'
+                ? 'bg-slate-900 text-white shadow-2xs'
+                : 'text-slate-600 hover:text-rose-600 hover:bg-rose-50'
+            }`}
+          >
+            Critical Only ({criticalCount})
+          </button>
+          <button
+            onClick={() => setPrimaryFilter('infosys')}
+            className={`px-3.5 py-1.5 text-xs font-bold rounded-md transition-all cursor-pointer ${
+              primaryFilter === 'infosys'
+                ? 'bg-slate-900 text-white shadow-2xs'
+                : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+            }`}
+          >
+            Infosys Only ({targetCounts.Infosys || 0})
+          </button>
+        </div>
+      </div>
+
+      {/* 2. Secondary Filter Bar (Compact dropdowns) */}
+      <div className="bg-white border border-slate-200/90 rounded-xl p-3 shadow-2xs flex flex-wrap items-center gap-3 text-xs">
+        {/* Search input */}
+        <div className="relative flex-1 min-w-[200px]">
+          <Search className="w-3.5 h-3.5 text-slate-400 absolute left-2.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+          <input
+            type="text"
+            value={searchFilter}
+            onChange={(e) => setSearchFilter(e.target.value)}
+            placeholder="Search events, sources, targets..."
+            className="w-full h-8 pl-8 pr-3 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-1 focus:ring-slate-400 focus:border-slate-400"
+          />
+        </div>
+
+        {/* Severity dropdown */}
+        <select
+          value={severityFilter}
+          onChange={(e) => setSeverityFilter(e.target.value)}
+          className="h-8 px-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700 font-medium focus:outline-none cursor-pointer"
+        >
+          <option value="ALL">Severity: All</option>
+          <option value="Critical">Critical</option>
+          <option value="High">High</option>
+          <option value="Medium">Medium</option>
+          <option value="Low">Low</option>
+        </select>
+
+        {/* Target dropdown */}
+        <select
+          value={targetFilter}
+          onChange={(e) => setTargetFilter(e.target.value)}
+          className="h-8 px-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700 font-medium focus:outline-none cursor-pointer max-w-[150px]"
+        >
+          <option value="ALL">Target: All</option>
+          {availableEntities.map((ent) => (
+            <option key={ent} value={ent}>
+              {ent}
+            </option>
+          ))}
+        </select>
+
+        {/* Source dropdown */}
+        <select
+          value={sourceFilter}
+          onChange={(e) => setSourceFilter(e.target.value)}
+          className="h-8 px-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700 font-medium focus:outline-none cursor-pointer max-w-[170px]"
+        >
+          <option value="ALL">Source: All</option>
+          {availableSources.map((src) => (
+            <option key={src} value={src}>
+              {src}
+            </option>
+          ))}
+        </select>
+
+        {/* Time dropdown */}
+        <select
+          value={timeFilter}
+          onChange={(e) => setTimeFilter(e.target.value)}
+          className="bg-slate-50 border border-slate-200 text-slate-700 text-sm rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-rose-500 transition-all"
+        >
+          <option value="All">Time: All</option>
+          <option value="1h">Past 1 Hour</option>
+          <option value="24h">Past 24 Hours</option>
+          <option value="7d">Past 7 Days</option>
+        </select>
+
+        {/* Sort order */}
+        <select
+          value={sortOrder}
+          onChange={(e) => setSortOrder(e.target.value as 'newest' | 'oldest')}
+          className="h-8 px-2.5 bg-slate-50 border border-slate-200 rounded-lg text-xs text-slate-700 font-medium focus:outline-none cursor-pointer"
+        >
+          <option value="newest">Sort: Newest</option>
+          <option value="oldest">Sort: Oldest</option>
+        </select>
+
+        {/* Clear All */}
+        <button
+          onClick={clearAllFilters}
+          className="h-8 px-2.5 text-rose-600 hover:text-rose-700 hover:bg-rose-50 rounded-lg font-semibold transition-colors cursor-pointer ml-auto"
+        >
+          Clear All
+        </button>
+      </div>
+
+      {/* 3. 75% / 25% Two-Column Layout */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* ========================================================= */}
+        {/* LEFT COLUMN: Event Stream (~75% -> col-span-8 or 9) */}
+        {/* ========================================================= */}
+        <div className="lg:col-span-9 space-y-4 min-w-0">
+          {filteredArticles.length === 0 ? (
+            <div className="text-center py-16 bg-white border border-slate-200/80 rounded-xl p-8 shadow-2xs">
+              <ShieldAlert className="w-10 h-10 text-slate-400 mx-auto mb-3" />
+              <p className="text-base font-semibold text-slate-800">No active incidents matching filters</p>
+              <p className="text-xs text-slate-500 mt-1">
+                Adjust the search query or click &quot;Clear All&quot; to restore the full live stream.
+              </p>
+            </div>
+          ) : (
+            filteredArticles.map((article, idx) => {
+              const isCritical = article.risk_level === 'Critical';
+              const isHigh = article.risk_level === 'High';
+              const isMedium = article.risk_level === 'Medium';
+              const isAcknowledged = article.status === 'ACKNOWLEDGED';
+              const isExpanded = Boolean(expandedBriefs[article.id]);
+
+              const badge = getSourceBadge(article.source_name);
+              const thumbnailSrc = getThumbnailForArticle(article, idx);
+
+              let detectedTime = 'Just now';
+              let publishedRelativeTime = 'Just now';
+              try {
+                detectedTime = formatDistanceToNow(
+                  new Date(article.ingested_at || article.published_at),
+                  { addSuffix: true }
+                );
+              } catch {
+                detectedTime = 'Recent';
+              }
+              try {
+                publishedRelativeTime = formatDistanceToNow(
+                  new Date(article.published_at || article.ingested_at),
+                  { addSuffix: true }
+                );
+              } catch {
+                publishedRelativeTime = 'Recent';
+              }
+
+              const scoreValue = article.risk_score
+                ? article.risk_score > 10
+                  ? (article.risk_score / 10).toFixed(1)
+                  : article.risk_score.toFixed(1)
+                : isCritical
+                ? '9.5'
+                : isHigh
+                ? '7.5'
+                : '5.8';
+
+              // Severity styles
+              let severityBadgeClass = 'bg-slate-100 text-slate-700 border-slate-200';
+              if (isCritical) {
+                severityBadgeClass = 'bg-rose-50 text-rose-600 border-rose-200 font-bold';
+              } else if (isHigh) {
+                severityBadgeClass = 'bg-amber-50 text-amber-700 border-amber-200 font-bold';
+              } else if (isMedium) {
+                severityBadgeClass = 'bg-blue-50 text-blue-700 border-blue-200 font-bold';
+              }
+
+              // Extract tag words from theme or text
+              const tags = [
+                article.entity_mentioned || 'Infosys',
+                isCritical ? 'Regulatory' : isHigh ? 'Market' : 'Enterprise',
+                'Intelligence'
+              ];
+
+              return (
+                <div
+                  key={article.id}
+                  className={`rounded-xl border transition-all duration-200 shadow-2xs hover:shadow-xs p-4 sm:p-5 ${
+                    isCritical
+                      ? 'bg-rose-50/20 border-rose-200 border-l-4 border-l-rose-600'
+                      : 'bg-white border-slate-200/90'
+                  } ${isAcknowledged ? 'opacity-65 bg-slate-50/50' : ''}`}
+                >
+                  {/* Horizontal Card Layout */}
+                  <div className="flex flex-col sm:flex-row gap-4 sm:gap-5 items-start">
+                    {/* A. Left Column (Image Area): exactly 155px, shrink-0, hidden on mobile */}
+                    <div className="hidden sm:flex w-[155px] h-[105px] shrink-0 rounded-lg overflow-hidden bg-slate-100 border border-slate-200/80">
+                      <img
+                        src={thumbnailSrc}
+                        alt="Article thumbnail"
+                        onError={(e) => {
+                          (e.target as HTMLElement).setAttribute(
+                            'src',
+                            'https://images.unsplash.com/photo-1486406146926-c627a92ad1ab?w=500&auto=format&fit=crop&q=80'
+                          );
+                        }}
+                        className="w-full h-full object-cover"
+                      />
+                    </div>
+
+                    {/* B. Right Column (Content Area): flex-grows to fill remaining space */}
+                    <div className="flex-1 min-w-0 space-y-2.5">
+                      {/* Top Row: Source, Time, Target, and Severity Badge */}
+                      <div className="flex items-center justify-between gap-2 flex-wrap text-xs">
+                        <div className="flex items-center gap-2 text-slate-500 flex-wrap">
+                          {/* Breaking pill on Critical */}
+                          {isCritical && (
+                            <span className="px-1.5 py-0.5 rounded bg-rose-600 text-white font-mono text-[9px] font-bold tracking-wider">
+                              BREAKING
+                            </span>
+                          )}
+
+                          {/* Source Brand Badge */}
+                          <span
+                            className={`w-4 h-4 rounded flex items-center justify-center text-[9px] font-bold ${badge.bg} ${badge.text}`}
+                          >
+                            {badge.tag}
+                          </span>
+                          <span className="font-semibold text-slate-700">
+                            {article.source_name || 'News Wire'}
+                          </span>
+
+                          {/* API Source Tag */}
+                          <span className="px-1.5 py-0.2 rounded bg-slate-100 text-slate-500 text-[9px] uppercase font-bold tracking-wider border border-slate-200">
+                            VIA {article.api_source?.toUpperCase() || 'GOOGLE RSS'}
+                          </span>
+
+                          <span className="text-slate-300">•</span>
+                          <span className="flex items-center gap-1 text-emerald-700 font-medium">
+                            <Clock className="w-3 h-3 text-emerald-500" />
+                            Detected {detectedTime}
+                          </span>
+                          <span className="text-slate-300">·</span>
+                          <span className="text-slate-400 text-[10px]">
+                            Published {publishedRelativeTime}
+                          </span>
+
+                          <span className="text-slate-300">•</span>
+                          <span>
+                            Target:{' '}
+                            <strong className="text-slate-900 font-semibold">
+                              {article.entity_mentioned || 'Infosys'}
+                            </strong>
+                          </span>
+                        </div>
+
+                        {/* Top-Right Severity Badge */}
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span
+                            className={`px-2.5 py-0.5 rounded text-xs font-mono tracking-wide border ${severityBadgeClass}`}
+                          >
+                            {article.risk_level?.toUpperCase() || 'MEDIUM'} {scoreValue}/10
+                          </span>
+
+                          {isAcknowledged && (
+                            <span className="px-2 py-0.5 rounded text-[10px] font-semibold bg-emerald-50 border border-emerald-200 text-emerald-700 font-mono">
+                              ACKNOWLEDGED
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Headline (Clamped to 2 lines, 17-18px) */}
+                      <h3 className="font-bold text-[17px] text-slate-900 line-clamp-2 leading-snug">
+                        {article.title}
+                      </h3>
+
+                      {/* Summary (Clamped to 2 lines, 13-14px) */}
+                      <p className="text-[13px] text-slate-500 line-clamp-2 leading-relaxed">
+                        {article.five_bullet_summary?.[0] || article.raw_content}
+                      </p>
+
+                      {/* Tags Bar */}
+                      <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                        {tags.map((tag, idx) => (
+                          <span
+                            key={idx}
+                            className="px-2 py-0.5 rounded text-[11px] bg-slate-100 text-slate-600 font-medium border border-slate-200/60"
+                          >
+                            {tag}
+                          </span>
+                        ))}
+                      </div>
+
+                      {/* Progressive Disclosure: Collapsible 5-Bullet Brief */}
+                      <div>
+                        <button
+                          onClick={() => toggleBrief(article.id)}
+                          className="flex items-center gap-1 text-xs font-semibold text-slate-700 hover:text-slate-900 transition-colors cursor-pointer py-1"
+                        >
+                          {isExpanded ? (
+                            <>
+                              <ChevronUp className="w-3.5 h-3.5 text-slate-500" />
+                              <span>Hide Executive 5-Bullet Intelligence Brief</span>
+                            </>
+                          ) : (
+                            <>
+                              <ChevronDown className="w-3.5 h-3.5 text-slate-500" />
+                              <span>Show Executive 5-Bullet Intelligence Brief</span>
+                            </>
+                          )}
+                        </button>
+
+                        {isExpanded && (
+                          <div className="mt-2.5 p-3.5 rounded-lg bg-slate-50 border border-slate-200/80 space-y-2 text-xs">
+                            <h4 className="font-mono font-bold uppercase tracking-wider text-slate-500 text-[10px]">
+                              EXECUTIVE 5-BULLET INTELLIGENCE BRIEF:
+                            </h4>
+                            <ul className="space-y-1 text-slate-700 list-disc list-inside marker:text-rose-500 leading-relaxed">
+                              {Array.isArray(article.five_bullet_summary) &&
+                              article.five_bullet_summary.length > 0 ? (
+                                article.five_bullet_summary.map((b, i) => (
+                                  <li key={i} className="pl-0.5">
+                                    <span>{b}</span>
+                                  </li>
+                                ))
+                              ) : (
+                                <li>Real-time event recorded into central memory store.</li>
+                              )}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Bottom Row Action Buttons */}
+                      <div className="flex items-center justify-between pt-2 border-t border-slate-100 flex-wrap gap-2">
+                        {/* View Source functional link */}
+                        {article.url ? (
+                          <a
+                            href={article.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1.5 text-xs font-medium text-slate-500 hover:text-slate-900 hover:underline"
+                          >
+                            <ExternalLink className="w-3.5 h-3.5" />
+                            <span>View Source</span>
+                          </a>
+                        ) : (
+                          <span className="text-xs text-slate-400">Verified Wire Source</span>
+                        )}
+
+                        {/* Action Buttons */}
+                        <div className="flex items-center gap-2">
+                          <button
+                            onClick={() => onAcknowledge(article.id)}
+                            disabled={isAcknowledged}
+                            className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold border transition-all cursor-pointer ${
+                              isAcknowledged
+                                ? 'bg-emerald-50 text-emerald-700 border-emerald-200 cursor-default'
+                                : 'bg-white text-slate-700 border-slate-200 hover:bg-slate-50 active:bg-slate-100 shadow-2xs'
+                            }`}
+                          >
+                            <Check className="w-3.5 h-3.5" />
+                            <span>{isAcknowledged ? 'Acknowledged' : 'Acknowledge'}</span>
+                          </button>
+
+                          <button
+                            onClick={() => onEscalateVoice(article)}
+                            className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-lg text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-white shadow-2xs transition-all cursor-pointer"
+                          >
+                            <PhoneCall className="w-3.5 h-3.5 text-rose-500" />
+                            <span>Escalate Voice Call</span>
+                          </button>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* ========================================================= */}
+        {/* RIGHT COLUMN: Intelligence Sidebar (~25% -> col-span-3) */}
+        {/* ========================================================= */}
+        <div className="lg:col-span-3 space-y-4">
+          {/* Card 1: Live Overview */}
+          <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-2xs space-y-3">
+            <div className="flex items-center gap-2 pb-1 border-b border-slate-100">
+              <Activity className="w-4 h-4 text-rose-600" />
+              <div>
+                <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wide">Live Overview</h3>
+                <p className="text-[10px] text-slate-400">Real-time monitoring</p>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2.5 pt-1">
+              <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100">
+                <div className="text-[11px] text-slate-500 font-medium">Total Events</div>
+                <div className="text-xl font-bold text-slate-900 mt-0.5 font-mono">{totalEvents}</div>
+              </div>
+              <div className="p-2.5 rounded-lg bg-rose-50/60 border border-rose-100">
+                <div className="text-[11px] text-rose-700 font-medium">Critical</div>
+                <div className="text-xl font-bold text-rose-600 mt-0.5 font-mono">{criticalCount}</div>
+              </div>
+              <div className="p-2.5 rounded-lg bg-amber-50/60 border border-amber-100">
+                <div className="text-[11px] text-amber-700 font-medium">High</div>
+                <div className="text-xl font-bold text-amber-600 mt-0.5 font-mono">{highCount}</div>
+              </div>
+              <div className="p-2.5 rounded-lg bg-slate-50 border border-slate-100">
+                <div className="text-[11px] text-slate-500 font-medium">Others</div>
+                <div className="text-xl font-bold text-slate-700 mt-0.5 font-mono">{othersCount}</div>
+              </div>
+            </div>
+          </div>
+
+          {/* Card 2: Targets Under Watch */}
+          <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-2xs space-y-3">
+            <div className="flex items-center gap-2 pb-1 border-b border-slate-100">
+              <ShieldAlert className="w-4 h-4 text-rose-600" />
+              <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wide">Targets Under Watch</h3>
+            </div>
+
+            <div className="space-y-2 pt-1 text-xs">
+              {[
+                { name: 'Infosys', count: targetCounts.Infosys || 0, color: 'bg-blue-600' },
+                { name: 'TCS', count: targetCounts.TCS || 0, color: 'bg-purple-600' },
+                { name: 'Wipro', count: targetCounts.Wipro || 0, color: 'bg-emerald-600' },
+                { name: 'Accenture', count: targetCounts.Accenture || 0, color: 'bg-rose-600' }
+              ].map((target) => (
+                <div
+                  key={target.name}
+                  className="flex items-center justify-between p-2 rounded-lg bg-slate-50 hover:bg-slate-100/70 transition-colors border border-slate-100"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className={`w-2 h-2 rounded-full ${target.color}`} />
+                    <span className="font-semibold text-slate-800">{target.name}</span>
+                  </div>
+                  <span className="font-mono font-bold text-slate-700 px-2 py-0.5 rounded bg-white border border-slate-200 text-[11px]">
+                    {target.count}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* Card 3: Event Trends (SVG Area Wave) */}
+          <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-2xs space-y-3">
+            <div className="flex items-center justify-between pb-1 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <TrendingUp className="w-4 h-4 text-rose-600" />
+                <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wide">Event Trends</h3>
+              </div>
+              <span className="text-[10px] text-slate-400 font-medium">Last 24 hours</span>
+            </div>
+
+            <div className="pt-1 space-y-2">
+              <div className="h-20 w-full relative flex items-end">
+                {/* Clean SVG Trend Wave */}
+                <svg className="w-full h-full" viewBox="0 0 240 80" fill="none" preserveAspectRatio="none">
+                  <defs>
+                    <linearGradient id="roseWave" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="0%" stopColor="#E11D48" stopOpacity="0.3" />
+                      <stop offset="100%" stopColor="#E11D48" stopOpacity="0.0" />
+                    </linearGradient>
+                  </defs>
+                  <path
+                    d="M 0 65 Q 30 35, 60 50 T 120 30 T 180 45 T 240 20 L 240 80 L 0 80 Z"
+                    fill="url(#roseWave)"
+                  />
+                  <path
+                    d="M 0 65 Q 30 35, 60 50 T 120 30 T 180 45 T 240 20"
+                    stroke="#E11D48"
+                    strokeWidth="2"
+                    fill="none"
+                  />
+                </svg>
+              </div>
+
+              <div className="flex justify-between text-[10px] text-slate-400 font-mono">
+                <span>12AM</span>
+                <span>6AM</span>
+                <span>12PM</span>
+                <span>6PM</span>
+                <span>NOW</span>
+              </div>
+            </div>
+          </div>
+
+          {/* Card 4: System Status */}
+          <div className="bg-white border border-slate-200 rounded-xl p-4 shadow-2xs space-y-3">
+            <div className="flex items-center justify-between pb-1 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <Server className="w-4 h-4 text-emerald-600" />
+                <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wide">System Status</h3>
+              </div>
+              <span className="text-[10px] font-semibold text-emerald-600 flex items-center gap-1">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />
+                Active
+              </span>
+            </div>
+
+            <div className="space-y-2 pt-1 text-xs">
+              <div className="flex items-center justify-between text-slate-600">
+                <span className="flex items-center gap-1.5">
+                  <Radio className="w-3.5 h-3.5 text-slate-400" />
+                  News Ingestion
+                </span>
+                <span className="text-emerald-600 font-semibold font-mono text-[11px]">Live</span>
+              </div>
+              <div className="flex items-center justify-between text-slate-600">
+                <span className="flex items-center gap-1.5">
+                  <Cpu className="w-3.5 h-3.5 text-slate-400" />
+                  AI Analysis
+                </span>
+                <span className="text-emerald-600 font-semibold font-mono text-[11px]">Active</span>
+              </div>
+              <div className="flex items-center justify-between text-slate-600">
+                <span className="flex items-center gap-1.5">
+                  <Activity className="w-3.5 h-3.5 text-slate-400" />
+                  Alert Engine
+                </span>
+                <span className="text-emerald-600 font-semibold font-mono text-[11px]">Running</span>
+              </div>
+              <div className="flex items-center justify-between text-slate-600">
+                <span className="flex items-center gap-1.5">
+                  <Database className="w-3.5 h-3.5 text-slate-400" />
+                  Database
+                </span>
+                <span className="text-emerald-600 font-semibold font-mono text-[11px]">Connected</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};

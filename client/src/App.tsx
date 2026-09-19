@@ -1,311 +1,275 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { Header } from './components/Header';
-import { WarRoom } from './components/WarRoom';
-import { CompetitorRadar } from './components/CompetitorRadar';
-import { SLAEngine } from './components/SLAEngine';
-import { OmnichannelModal } from './components/OmnichannelModal';
-import { SimulationBar } from './components/SimulationBar';
-import { VoiceCallModal } from './components/VoiceCallModal';
-import { ArticleDetailModal } from './components/ArticleDetailModal';
-import { DeviceSimulator } from './components/DeviceSimulator';
-import { useVoiceCall } from './hooks/useVoiceCall';
-import { useRealtimeWarRoom, RealtimeArticle } from './hooks/useRealtimeWarRoom';
-import { 
-  fetchCompetitors, 
-  fetchHealth, 
-  triggerScenario, 
-  ingestCustomPayload, 
-  updateVoiceCall 
-} from './services/api';
-import { IntelligenceItem, CompetitorParityMetrics, SystemHealthMetrics, EntityName } from './types';
-import confetti from 'canvas-confetti';
+import React, { useState } from 'react';
+import { BrowserRouter, Routes, Route, Navigate, useOutletContext } from 'react-router-dom';
+import { AppShell } from './components/AppShell';
+import { DashboardView } from './components/DashboardView';
+import { CrisisWarRoomView } from './components/CrisisWarRoomView';
+import { CompetitorRadarView } from './components/CompetitorRadarView';
+import { SlaProofEngineView } from './components/SlaProofEngineView';
+import { IntelligenceTrendAnalysisView } from './components/IntelligenceTrendAnalysisView';
+import { IntelligenceSourcesView } from './components/IntelligenceSourcesView';
+import { Article } from './hooks/useWarRoom';
+import {
+  TrendingUp,
+  FileText,
+  Database,
+  Bell,
+  CheckCircle2,
+  Compass
+} from 'lucide-react';
 
-/**
- * Adapter converting RealtimeArticle (from Supabase / Server) to IntelligenceItem
- */
-function adaptRealtimeArticle(rt: RealtimeArticle): IntelligenceItem {
-  const isClient = rt.entity_mentioned === 'Infosys';
-  const bullets = Array.isArray(rt.five_bullet_summary)
-    ? rt.five_bullet_summary
-    : Object.values(rt.five_bullet_summary);
-
-  const publishedAt = rt.published_at || new Date().toISOString();
-  const ingestedAt = rt.ingested_at || new Date().toISOString();
-  const triagedAt = rt.triaged_at || new Date().toISOString();
-
-  const totalDurationMs = Math.max(
-    14000,
-    new Date(triagedAt).getTime() - new Date(ingestedAt).getTime() + 4000
-  );
-
-  return {
-    id: rt.id,
-    entity: (rt.entity_mentioned as EntityName) || 'Infosys',
-    isClient,
-    platform: rt.source_name.toLowerCase().includes('twitter')
-      ? 'twitter'
-      : rt.source_name.toLowerCase().includes('instagram')
-      ? 'instagram'
-      : rt.source_name.toLowerCase().includes('facebook')
-      ? 'facebook'
-      : 'print_epaper',
-    metadata: {
-      newspaperOrSource: rt.source_name,
-      author: 'Senior Correspondent / Byline',
-      pageNumber: rt.source_name.includes('Page') ? rt.source_name.match(/Page \d+/)?.[0] : undefined,
-      headline: rt.title,
-      shortDescription: rt.raw_content,
-      fullText: rt.raw_content,
-      url: rt.url,
-      verifiedSource: true,
-      reachCount: '1.2M Reach'
-    },
-    sentiment: rt.sentiment.toLowerCase() as any,
-    sentimentScore: rt.risk_level === 'Critical' ? -0.92 : rt.risk_level === 'High' ? -0.65 : 0.1,
-    riskScore: Number(rt.risk_score),
-    riskLevel: rt.risk_level,
-    summary: {
-      whatHappened: bullets[0] || rt.raw_content,
-      whyItMatters: bullets[1] || 'Strategic enterprise risk requiring executive visibility.',
-      riskJustification: bullets[2] || `Risk rating: ${rt.risk_score}/10 based on publisher circulation.`,
-      competitorImpact: bullets[3] || 'TCS and Accenture assessing account positioning.',
-      recommendedAction: bullets[4] || 'Convene immediate crisis response briefing.'
-    },
-    sla: {
-      publishedAt,
-      ingestedAt,
-      triagedAt,
-      dispatchedAt: new Date().toISOString(),
-      ingestDurationMs: 14000,
-      triageDurationMs: 16000,
-      dispatchDurationMs: 4000,
-      totalDurationMs,
-      slaBreached: totalDurationMs > 120000
-    },
-    dispatch: {
-      dashboard: true,
-      whatsapp: { dispatched: rt.risk_level === 'High' || rt.risk_level === 'Critical', recipient: '+91-98840-CRISIS' },
-      slack: { dispatched: true, channel: '#crisis-war-room-exec' },
-      email: { dispatched: rt.risk_level === 'Critical', recipients: ['cmo@infosys.com'] },
-      voiceCall: {
-        dispatched: rt.risk_level === 'Critical',
-        targetRole: 'Chief Crisis Officer & CMO',
-        phone: '+91-98840-83333',
-        callStatus: rt.risk_level === 'Critical' ? 'ringing' : 'idle'
-      }
-    },
-    status: rt.status.toLowerCase() as any
-  };
+// Context interface shared from AppShell Outlet
+export interface OutletContextType {
+  articles: Article[];
+  loading: boolean;
+  isRealtimeActive: boolean;
+  searchQuery: string;
+  onSelectArticle: (art: Article) => void;
+  onAcknowledge: (id: string) => Promise<void>;
+  onEscalateVoice: (art: Article) => void;
+  onNavigateToWarRoom: () => void;
 }
 
-export function App() {
-  const [competitors, setCompetitors] = useState<Record<EntityName, CompetitorParityMetrics> | null>(null);
-  const [health, setHealth] = useState<SystemHealthMetrics | null>(null);
-
-  const [activeTab, setActiveTab] = useState<'war-room' | 'competitor-radar' | 'sla-engine' | 'omnichannel'>('war-room');
-  const [viewportMode, setViewportMode] = useState<'desktop' | 'mobile-preview'>('desktop');
-
-  // Modals & Inspectors
-  const [isSimModalOpen, setIsSimModalOpen] = useState(false);
-  const [selectedArticleForDetail, setSelectedArticleForDetail] = useState<IntelligenceItem | null>(null);
-
-  // Interactive Voice Call Hook
-  const {
-    activeCallArticle,
-    callState,
-    ivrMessage,
-    audioLevel,
-    triggerVoiceCall,
-    answerCall,
-    handleKeypadPress,
-    closeCall
-  } = useVoiceCall();
-
-  // Supabase Realtime & Express War Room Hook
-  const {
-    articles: realtimeArticles,
-    simulateCrisis: runSimulateCrisis,
-    acknowledgeArticle: runAcknowledgeArticle,
-    testVoiceCall
-  } = useRealtimeWarRoom(useCallback((newCritical: RealtimeArticle) => {
-    // Automatically launch voice call for critical incoming items
-    const adapted = adaptRealtimeArticle(newCritical);
-    triggerVoiceCall(adapted);
-  }, [triggerVoiceCall]));
-
-  // Map realtime articles to IntelligenceItem
-  const articles: IntelligenceItem[] = realtimeArticles.map(adaptRealtimeArticle);
-
-  // Load competitor and telemetry health data
-  useEffect(() => {
-    fetchCompetitors().then(data => {
-      if (data) setCompetitors(data);
-    });
-    fetchHealth().then(data => {
-      if (data) setHealth(data);
-    });
-  }, [realtimeArticles]);
-
-  // Acknowledge handler (triggers PATCH /api/articles/:id/acknowledge)
-  const handleAcknowledge = async (id: string) => {
-    await runAcknowledgeArticle(id);
-    confetti({
-      particleCount: 40,
-      spread: 60,
-      origin: { y: 0.8 }
-    });
-  };
-
-  // Direct "Simulate Crisis" button handler from Header
-  const handleHeaderSimulateCrisis = async () => {
-    try {
-      const result = await runSimulateCrisis();
-      if (result?.article?.risk_level === 'Critical') {
-        const adapted = adaptRealtimeArticle(result.article);
-        triggerVoiceCall(adapted);
-      }
-    } catch (e) {
-      console.error('Simulate crisis trigger error:', e);
-      setIsSimModalOpen(true);
-    }
-  };
-
-  const handleVoiceCall = async (article: IntelligenceItem) => {
-    await testVoiceCall(article.metadata.headline, [
-      article.summary.whatHappened,
-      article.summary.whyItMatters,
-      article.summary.riskJustification,
-      article.summary.competitorImpact,
-      article.summary.recommendedAction
-    ]);
-    triggerVoiceCall(article);
-  };
-
-  // Scenario presets handler from modal
-  const handleTriggerPreset = async (scenarioKey: string) => {
-    const newArticle = await triggerScenario(scenarioKey);
-    if (newArticle && newArticle.riskLevel === 'Critical') {
-      triggerVoiceCall(newArticle);
-    }
-  };
-
-  // Custom ingest handler
-  const handleCustomIngest = async (payload: any) => {
-    const newArticle = await ingestCustomPayload(payload);
-    if (newArticle && newArticle.riskLevel === 'Critical') {
-      triggerVoiceCall(newArticle);
-    }
-  };
-
-  const criticalCount = articles.filter(a => a.riskLevel === 'Critical' && a.status === 'active').length;
-  const avgLatency = health?.averageLatencyMs || 32500;
-  const slaCompliance = health?.slaComplianceRate || 100.0;
-
+// 1. Routed Views wrapping existing view components using Outlet Context
+function DashboardRoute() {
+  const ctx = useOutletContext<OutletContextType>();
   return (
-    <div className="min-h-screen bg-[#060709] text-zinc-100 flex flex-col selection:bg-rose-500/20 selection:text-rose-200">
-      {/* Enterprise Header with Single 'Simulate Crisis' Primary Action */}
-      <Header
-        activeTab={activeTab}
-        setActiveTab={setActiveTab}
-        viewportMode={viewportMode}
-        setViewportMode={setViewportMode}
-        criticalCount={criticalCount}
-        avgLatency={avgLatency}
-        slaCompliance={slaCompliance}
-        onOpenQuickTrigger={handleHeaderSimulateCrisis}
-      />
+    <DashboardView
+      articles={ctx.articles}
+      onNavigateToWarRoom={ctx.onNavigateToWarRoom}
+      onSelectArticle={ctx.onSelectArticle}
+      searchQuery={ctx.searchQuery}
+      isRealtimeActive={ctx.isRealtimeActive}
+    />
+  );
+}
 
-      {/* Main Content: Adaptive Desktop / Mobile Device Viewport */}
-      <main className="flex-1 max-w-7xl mx-auto w-full p-4 lg:p-6">
-        <DeviceSimulator
-          viewportMode={viewportMode}
-          onExitMobile={() => setViewportMode('desktop')}
-        >
-          {activeTab === 'war-room' && (
-            <WarRoom
-              articles={articles}
-              onAcknowledge={handleAcknowledge}
-              onOpenVoiceCall={handleVoiceCall}
-              onSelectArticle={(article) => setSelectedArticleForDetail(article)}
-              onOpenOmnichannel={() => setActiveTab('omnichannel')}
-            />
-          )}
+function CrisisWarRoomRoute() {
+  const ctx = useOutletContext<OutletContextType>();
+  return (
+    <CrisisWarRoomView
+      articles={ctx.articles}
+      onAcknowledge={ctx.onAcknowledge}
+      onEscalateVoice={ctx.onEscalateVoice}
+      loading={ctx.loading}
+    />
+  );
+}
 
-          {activeTab === 'competitor-radar' && (
-            <CompetitorRadar
-              competitors={competitors}
-              articles={articles}
-              onSelectArticle={(article) => setSelectedArticleForDetail(article)}
-            />
-          )}
+function CompetitorRadarRoute() {
+  const ctx = useOutletContext<OutletContextType>();
+  return (
+    <CompetitorRadarView
+      articles={ctx.articles}
+      onAcknowledge={ctx.onAcknowledge}
+      onEscalateVoice={ctx.onEscalateVoice}
+      loading={ctx.loading}
+    />
+  );
+}
 
-          {activeTab === 'sla-engine' && (
-            <SLAEngine
-              articles={articles}
-              health={health}
-            />
-          )}
+function SlaProofEngineRoute() {
+  const ctx = useOutletContext<OutletContextType>();
+  return <SlaProofEngineView articles={ctx.articles} />;
+}
 
-          {activeTab === 'omnichannel' && (
-            <OmnichannelModal
-              articles={articles}
-              onOpenVoiceCall={handleVoiceCall}
-            />
-          )}
-        </DeviceSimulator>
-      </main>
+// 2. Analysis Route
+function AnalysisRoute() {
+  const { articles, onSelectArticle } = useOutletContext<OutletContextType>();
+  return <IntelligenceTrendAnalysisView articles={articles} onSelectArticle={onSelectArticle} />;
+}
 
-      {/* Footer Status Bar */}
-      <footer className="border-t border-slate-800 bg-slate-950 px-6 py-3 text-xs text-slate-500 font-mono flex flex-col sm:flex-row items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <span className="w-2 h-2 rounded-full bg-emerald-500" />
-          <span>Vee-Alert Production Engine (Port 5000) • Supabase Realtime Active</span>
+// 3. Reports Route
+function ReportsRoute() {
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 p-8 shadow-2xs space-y-6">
+      <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
+        <FileText className="w-6 h-6 text-rose-600" />
+        <div>
+          <h2 className="text-xl font-bold text-slate-900">Executive Intelligence Dossiers</h2>
+          <p className="text-xs text-slate-500">Automated C-Suite briefs ready for instant export.</p>
         </div>
-        <div className="flex items-center gap-3 text-[11px]">
-          <span>Target: Infosys</span>
-          <span>•</span>
-          <span>Competitors: TCS, Wipro, Accenture</span>
-          <span>•</span>
-          <span>SLA: &lt; 120s</span>
-        </div>
-      </footer>
-
-      {/* Crisis Preset & Custom Ingest Console */}
-      <SimulationBar
-        isOpen={isSimModalOpen}
-        onClose={() => setIsSimModalOpen(false)}
-        onTriggerPreset={handleTriggerPreset}
-        onCustomIngest={handleCustomIngest}
-      />
-
-      {/* Interactive Voice Call Modal Overlay */}
-      <VoiceCallModal
-        article={activeCallArticle}
-        callState={callState}
-        ivrMessage={ivrMessage}
-        audioLevel={audioLevel}
-        onAnswer={answerCall}
-        onKeypadPress={(key) => {
-          handleKeypadPress(key);
-          if (activeCallArticle) {
-            updateVoiceCall(
-              activeCallArticle.id, 
-              key === '1' ? 'acknowledged' : 'pr_bridged', 
-              key as any
-            );
-          }
-        }}
-        onClose={closeCall}
-      />
-
-      {/* Article Metadata Inspector */}
-      <ArticleDetailModal
-        article={selectedArticleForDetail}
-        onClose={() => setSelectedArticleForDetail(null)}
-        onOpenVoiceCall={handleVoiceCall}
-      />
+      </div>
+      <div className="space-y-3">
+        {[
+          { title: 'Infosys Brand Threat Vector - Daily Brief', date: 'Today, 06:00 AM', status: 'Ready' },
+          { title: 'Competitor Pricing & Deal Vulnerability Analysis', date: 'Yesterday', status: 'Archived' },
+          { title: 'SLA Audit & Zero-Latency Proof Certificate', date: 'Sep 18, 2026', status: 'Verified' }
+        ].map((rep, idx) => (
+          <div key={idx} className="flex items-center justify-between p-4 rounded-lg bg-slate-50 border border-slate-200/80">
+            <div>
+              <h4 className="text-sm font-bold text-slate-900">{rep.title}</h4>
+              <span className="text-xs text-slate-500">{rep.date}</span>
+            </div>
+            <span className="px-2.5 py-1 text-xs font-semibold rounded bg-emerald-50 text-emerald-700 border border-emerald-200">
+              {rep.status}
+            </span>
+          </div>
+        ))}
+      </div>
     </div>
   );
 }
 
-export default App;
+// 4. News Feed Route
+function NewsFeedRoute() {
+  const { articles, onSelectArticle } = useOutletContext<OutletContextType>();
+
+  return (
+    <div className="space-y-4">
+      <div className="border-b border-slate-200 pb-3">
+        <h2 className="text-xl font-bold text-slate-900">Real-Time Ingestion News Wire</h2>
+        <p className="text-xs text-slate-500">Complete raw streaming telemetry across all verified wire sources.</p>
+      </div>
+      <div className="space-y-3">
+        {articles.map((art) => (
+          <div
+            key={art.id}
+            onClick={() => onSelectArticle(art)}
+            className="bg-white p-4 rounded-xl border border-slate-200 shadow-2xs hover:shadow-xs transition-all space-y-1.5 cursor-pointer"
+          >
+            <div className="flex justify-between text-xs text-slate-500">
+              <span className="font-semibold text-slate-700">{art.source_name}</span>
+              <span>Target: <strong className="text-slate-900">{art.entity_mentioned}</strong></span>
+            </div>
+            <h4 className="text-sm font-bold text-slate-900">{art.title}</h4>
+            <p className="text-xs text-slate-600 line-clamp-2">{art.raw_content}</p>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+// 5. Sources Route
+function SourcesRoute() {
+  const { articles } = useOutletContext<OutletContextType>();
+  return <IntelligenceSourcesView articles={articles} />;
+}
+
+// 6. Alerts Route
+function AlertsRoute() {
+  const { articles, onEscalateVoice } = useOutletContext<OutletContextType>();
+  const alertArticles = articles.filter((a) => a.risk_level === 'Critical' || a.risk_level === 'High');
+
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 p-8 shadow-2xs space-y-6">
+      <div className="flex items-center gap-3 border-b border-slate-100 pb-4">
+        <Bell className="w-6 h-6 text-rose-600" />
+        <div>
+          <h2 className="text-xl font-bold text-slate-900">Active High-Priority Alerts</h2>
+          <p className="text-xs text-slate-500">Articles flagged as High or Critical requiring immediate executive response.</p>
+        </div>
+      </div>
+      <div className="space-y-3">
+        {alertArticles.length === 0 ? (
+          <div className="p-8 text-center text-slate-400 text-sm">No critical or high risk alerts at this time.</div>
+        ) : (
+          alertArticles.map((art) => (
+            <div key={art.id} className="p-4 rounded-xl bg-slate-50 border border-slate-200 flex flex-wrap items-center justify-between gap-3">
+              <div className="space-y-1 max-w-xl">
+                <div className="flex items-center gap-2 text-xs">
+                  <span
+                    className={`px-2 py-0.5 rounded font-bold font-mono text-[11px] ${
+                      art.risk_level === 'Critical'
+                        ? 'bg-rose-100 text-rose-700'
+                        : 'bg-amber-100 text-amber-700'
+                    }`}
+                  >
+                    {art.risk_level}
+                  </span>
+                  <span className="text-slate-500">{art.entity_mentioned}</span>
+                </div>
+                <h4 className="text-sm font-bold text-slate-900">{art.title}</h4>
+              </div>
+              <button
+                onClick={() => onEscalateVoice(art)}
+                className="px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-xs font-semibold cursor-pointer shadow-2xs"
+              >
+                Escalate Call
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+    </div>
+  );
+}
+
+// 7. 404 Route
+function NotFoundRoute() {
+  return (
+    <div className="bg-white rounded-xl border border-slate-200 p-12 text-center shadow-2xs space-y-3">
+      <Compass className="w-10 h-10 text-slate-400 mx-auto" />
+      <h3 className="text-lg font-bold text-slate-900">Page Not Found</h3>
+      <p className="text-xs text-slate-500">The requested intelligence route does not exist.</p>
+    </div>
+  );
+}
+
+export default function App() {
+  const [searchQuery, setSearchQuery] = useState<string>('');
+  const [activeVoiceCallArticle, setActiveVoiceCallArticle] = useState<Article | null>(null);
+  const [selectedArticle, setSelectedArticle] = useState<Article | null>(null);
+
+  return (
+    <BrowserRouter>
+      <Routes>
+        <Route
+          element={
+            <AppShell
+              searchQuery={searchQuery}
+              setSearchQuery={setSearchQuery}
+              selectedArticle={selectedArticle}
+              setSelectedArticle={setSelectedArticle}
+              activeVoiceCallArticle={activeVoiceCallArticle}
+              setActiveVoiceCallArticle={setActiveVoiceCallArticle}
+            />
+          }
+        >
+          {/* 1. Dashboard */}
+          <Route path="/" element={<DashboardRoute />} />
+          <Route path="/dashboard" element={<DashboardRoute />} />
+
+          {/* 2. Crisis War Room */}
+          <Route path="/crisis-war-room" element={<CrisisWarRoomRoute />} />
+          <Route path="/dashboard/crisis-war-room" element={<CrisisWarRoomRoute />} />
+
+          {/* 3. Competitor Radar */}
+          <Route path="/competitor-radar" element={<CompetitorRadarRoute />} />
+          <Route path="/dashboard/competitor-radar" element={<CompetitorRadarRoute />} />
+
+          {/* 4. SLA Proof Engine */}
+          <Route path="/sla-proof-engine" element={<SlaProofEngineRoute />} />
+          <Route path="/dashboard/sla-proof-engine" element={<SlaProofEngineRoute />} />
+
+          {/* 5. Analysis */}
+          <Route path="/analysis" element={<AnalysisRoute />} />
+          <Route path="/dashboard/analysis" element={<AnalysisRoute />} />
+
+          {/* 6. Reports */}
+          <Route path="/reports" element={<ReportsRoute />} />
+          <Route path="/dashboard/reports" element={<ReportsRoute />} />
+
+          {/* 7. News Feed */}
+          <Route path="/news" element={<NewsFeedRoute />} />
+          <Route path="/dashboard/news" element={<NewsFeedRoute />} />
+
+          {/* 8. Sources */}
+          <Route path="/sources" element={<SourcesRoute />} />
+          <Route path="/dashboard/sources" element={<SourcesRoute />} />
+
+          {/* 9. Alerts */}
+          <Route path="/alerts" element={<AlertsRoute />} />
+          <Route path="/dashboard/alerts" element={<AlertsRoute />} />
+
+          {/* Clean Redirects for any legacy Settings route */}
+          <Route path="/settings" element={<Navigate to="/" replace />} />
+          <Route path="/dashboard/settings" element={<Navigate to="/" replace />} />
+
+          {/* Fallback Catch-All */}
+          <Route path="*" element={<Navigate to="/" replace />} />
+        </Route>
+      </Routes>
+    </BrowserRouter>
+  );
+}

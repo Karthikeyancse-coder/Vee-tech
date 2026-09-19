@@ -1,6 +1,7 @@
+/// <reference types="vite/client" />
 import { IntelligenceItem, CompetitorParityMetrics, SystemHealthMetrics, EntityName } from '../types';
 
-const BASE_URL = import.meta.env.VITE_API_BASE_URL || 'http://localhost:5000';
+const BASE_URL = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:5000';
 
 export async function fetchArticles(entity?: string, platform?: string): Promise<IntelligenceItem[]> {
   try {

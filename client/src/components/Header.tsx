@@ -1,114 +1,144 @@
-import React from 'react';
-import { Laptop, Smartphone } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { Search, Sun, RefreshCw, Radio } from 'lucide-react';
 
 interface HeaderProps {
-  activeTab: 'war-room' | 'competitor-radar' | 'sla-engine' | 'omnichannel';
-  setActiveTab: (tab: 'war-room' | 'competitor-radar' | 'sla-engine' | 'omnichannel') => void;
-  viewportMode: 'desktop' | 'mobile-preview';
-  setViewportMode: (mode: 'desktop' | 'mobile-preview') => void;
-  criticalCount: number;
-  avgLatency: number;
-  slaCompliance: number;
-  onOpenQuickTrigger: () => void;
+  onFetchLiveNews?: () => void;
+  onSimulateCrisis?: () => void;
+  isFetchingLive?: boolean;
+  isSimulating?: boolean;
+  searchQuery: string;
+  onSearchChange: (query: string) => void;
 }
 
 export const Header: React.FC<HeaderProps> = ({
-  activeTab,
-  setActiveTab,
-  viewportMode,
-  setViewportMode,
-  onOpenQuickTrigger
+  onFetchLiveNews,
+  onSimulateCrisis,
+  isFetchingLive,
+  isSimulating,
+  searchQuery,
+  onSearchChange
 }) => {
+  const [currentDateTime, setCurrentDateTime] = useState({
+    date: 'Sep 18, 2026',
+    time: '10:24 AM'
+  });
+
+  const isLoading = Boolean(isFetchingLive ?? isSimulating);
+  const handleFetch = onFetchLiveNews || onSimulateCrisis;
+
+  useEffect(() => {
+    const updateTime = () => {
+      const now = new Date();
+      const dateStr = now.toLocaleDateString('en-US', {
+        month: 'short',
+        day: 'numeric',
+        year: 'numeric'
+      });
+      const timeStr = now.toLocaleTimeString('en-US', {
+        hour: 'numeric',
+        minute: '2-digit',
+        hour12: true
+      });
+      setCurrentDateTime({ date: dateStr, time: timeStr });
+    };
+
+    updateTime();
+    const interval = setInterval(updateTime, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
   return (
-    <header className="bg-slate-950 border-b border-slate-800 sticky top-0 z-40 px-6 py-3">
-      <div className="max-w-7xl mx-auto flex items-center justify-between gap-4">
-        {/* Left: Logo with subtle red dot badge */}
-        <div className="flex items-center gap-2.5">
-          <span className="font-mono text-base font-extrabold tracking-wider text-white">
-            VEE-ALERT
-          </span>
-          <span className="w-2 h-2 rounded-full bg-rose-500" />
-        </div>
-
-        {/* Center: Tab switcher styled as subtle pill buttons */}
-        <nav className="flex items-center gap-1 p-1 rounded-lg bg-slate-900 border border-slate-800 text-xs font-medium text-slate-400">
-          <button
-            onClick={() => setActiveTab('war-room')}
-            className={`px-3.5 py-1.5 rounded-md transition-colors ${
-              activeTab === 'war-room'
-                ? 'bg-slate-800 text-white font-semibold shadow-sm'
-                : 'hover:text-slate-200'
-            }`}
-          >
-            Crisis War Room
-          </button>
-
-          <button
-            onClick={() => setActiveTab('competitor-radar')}
-            className={`px-3.5 py-1.5 rounded-md transition-colors ${
-              activeTab === 'competitor-radar'
-                ? 'bg-slate-800 text-white font-semibold shadow-sm'
-                : 'hover:text-slate-200'
-            }`}
-          >
-            Competitor Radar
-          </button>
-
-          <button
-            onClick={() => setActiveTab('sla-engine')}
-            className={`px-3.5 py-1.5 rounded-md transition-colors ${
-              activeTab === 'sla-engine'
-                ? 'bg-slate-800 text-white font-semibold shadow-sm'
-                : 'hover:text-slate-200'
-            }`}
-          >
-            SLA Proof
-          </button>
-
-          <button
-            onClick={() => setActiveTab('omnichannel')}
-            className={`px-3.5 py-1.5 rounded-md transition-colors ${
-              activeTab === 'omnichannel'
-                ? 'bg-slate-800 text-white font-semibold shadow-sm'
-                : 'hover:text-slate-200'
-            }`}
-          >
-            Omnichannel Hub
-          </button>
-        </nav>
-
-        {/* Right: Viewport mode + Primary 'Simulate Crisis' Button */}
-        <div className="flex items-center gap-3">
-          {/* Subtle Viewport Switcher for Laptop vs Mobile */}
-          <div className="hidden sm:flex items-center p-0.5 rounded-md bg-slate-900 border border-slate-800 text-slate-400">
-            <button
-              onClick={() => setViewportMode('desktop')}
-              title="Desktop View"
-              className={`p-1.5 rounded ${
-                viewportMode === 'desktop' ? 'bg-slate-800 text-white' : 'hover:text-slate-200'
-              }`}
-            >
-              <Laptop className="w-3.5 h-3.5" />
-            </button>
-            <button
-              onClick={() => setViewportMode('mobile-preview')}
-              title="Mobile View"
-              className={`p-1.5 rounded ${
-                viewportMode === 'mobile-preview' ? 'bg-slate-800 text-white' : 'hover:text-slate-200'
-              }`}
-            >
-              <Smartphone className="w-3.5 h-3.5" />
-            </button>
+    <header className="bg-[#F6F7F9] border-b border-slate-200/60 shrink-0 px-4 py-3 md:py-0 md:h-16 md:px-6 flex flex-col md:flex-row md:items-center justify-between gap-2.5 md:gap-4">
+      {/* Mobile Top Row: Brand & Fetch Live Button (< 768px ONLY) */}
+      <div className="flex md:hidden items-center justify-between gap-3 w-full">
+        {/* Brand Logo & Title */}
+        <div className="flex items-center gap-2 overflow-hidden">
+          <div className="w-7 h-7 rounded-full border-2 border-rose-600 flex items-center justify-center shrink-0">
+            <div className="w-3 h-3 rounded-full bg-rose-600" />
           </div>
-
-          {/* Primary Action Button */}
-          <button
-            onClick={onOpenQuickTrigger}
-            className="bg-rose-600 hover:bg-rose-500 text-white rounded-lg px-4 py-2 text-sm font-medium transition-colors shadow-sm active:scale-95"
-          >
-            Simulate Crisis
-          </button>
+          <div className="flex flex-col leading-tight">
+            <span className="font-bold text-slate-900 tracking-tight text-sm font-sans">
+              VEE-ALERT
+            </span>
+            <span className="text-[9px] font-medium text-slate-500 tracking-wide">
+              Intelligence Platform
+            </span>
+          </div>
         </div>
+
+        {/* Compact Mobile Fetch Live News Button */}
+        <button
+          onClick={handleFetch}
+          disabled={isLoading}
+          title="Scrape and triage authentic real-world news right now"
+          className="flex items-center gap-1.5 px-3 py-1.5 bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white rounded-lg text-xs font-semibold shadow-xs transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer shrink-0"
+        >
+          {isLoading ? (
+            <>
+              <RefreshCw className="w-3.5 h-3.5 animate-spin" />
+              <span>Fetching...</span>
+            </>
+          ) : (
+            <>
+              <Radio className="w-3.5 h-3.5" />
+              <span>Fetch Live</span>
+            </>
+          )}
+        </button>
+      </div>
+
+      {/* Global Search Bar (Full width on mobile, max-w-xl on desktop) */}
+      <div className="w-full md:flex-1 md:max-w-xl">
+        <div className="relative flex items-center">
+          <Search className="absolute left-3 w-4 h-4 text-slate-400 pointer-events-none" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => onSearchChange(e.target.value)}
+            placeholder="Search events, companies, sources, reports..."
+            className="w-full h-9 md:h-10 pl-9 md:pl-10 pr-4 md:pr-16 bg-white border border-slate-200 rounded-lg text-xs md:text-sm text-slate-800 placeholder-slate-400 focus:outline-none focus:ring-2 focus:ring-rose-500/20 focus:border-rose-500 transition-all shadow-xs"
+          />
+          <kbd className="hidden md:inline-block absolute right-3 px-1.5 py-0.5 text-[11px] font-medium text-slate-400 bg-slate-100 border border-slate-200 rounded shadow-2xs pointer-events-none">
+            Ctrl K
+          </kbd>
+        </div>
+      </div>
+
+      {/* Desktop Right Actions (>= 768px ONLY - Exactly identical to previous desktop UI) */}
+      <div className="hidden md:flex items-center gap-5 shrink-0">
+        {/* Theme Toggle Icon (Sun) */}
+        <button
+          title="Light Mode Active"
+          className="p-2 rounded-lg text-slate-600 hover:text-slate-900 hover:bg-slate-200/60 transition-colors cursor-pointer"
+        >
+          <Sun className="w-5 h-5 text-slate-600 hover:rotate-45 transition-transform duration-300" />
+        </button>
+
+        {/* Date & Time Display */}
+        <div className="text-right leading-tight select-none">
+          <div className="text-xs font-semibold text-slate-700">{currentDateTime.date}</div>
+          <div className="text-[11px] text-slate-400">{currentDateTime.time}</div>
+        </div>
+
+        {/* Primary Action: Red Fetch Live News Button (100% authentic live scraping) */}
+        <button
+          onClick={handleFetch}
+          disabled={isLoading}
+          title="Scrape and triage authentic real-world news right now"
+          className="flex items-center gap-2 px-4 py-2 bg-rose-600 hover:bg-rose-700 active:bg-rose-800 text-white rounded-lg text-sm font-semibold shadow-sm transition-all duration-150 disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer"
+        >
+          {isLoading ? (
+            <>
+              <RefreshCw className="w-4 h-4 animate-spin" />
+              <span>Fetching Live...</span>
+            </>
+          ) : (
+            <>
+              <Radio className="w-4 h-4" />
+              <span>Fetch Live News</span>
+            </>
+          )}
+        </button>
       </div>
     </header>
   );

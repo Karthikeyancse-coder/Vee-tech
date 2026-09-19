@@ -4,42 +4,38 @@
 
 @layer base {
   :root {
-    --bg-main: #060709;
-    --border-dim: #1e2230;
-    --card-surface: #0c0f18;
+    --bg-main: #F6F7F9;
+    --border-dim: #E2E8F0;
+    --card-surface: #FFFFFF;
+  }
+
+  body {
+    background-color: #F6F7F9;
+    color: #0F172A;
+    font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   }
 }
 
-/* Custom Tactical Scrollbar */
+/* Premium Light Mode Scrollbar */
 ::-webkit-scrollbar {
-  width: 5px;
-  height: 5px;
+  width: 6px;
+  height: 6px;
 }
 ::-webkit-scrollbar-track {
-  background: #090b10;
+  background: #F1F5F9;
 }
 ::-webkit-scrollbar-thumb {
-  background: #1f2536;
-  border-radius: 2px;
+  background: #CBD5E1;
+  border-radius: 3px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: #333b54;
+  background: #94A3B8;
 }
 
-/* Tactical Background Grid Pattern */
-.tactical-grid {
-  background-size: 32px 32px;
+/* Subtle dot grid for tactical intelligence feel */
+.intel-grid-bg {
+  background-size: 24px 24px;
   background-image: 
-    linear-gradient(to right, rgba(255, 255, 255, 0.02) 1px, transparent 1px),
-    linear-gradient(to bottom, rgba(255, 255, 255, 0.02) 1px, transparent 1px);
-}
-
-.radar-sweep-bg {
-  background: conic-gradient(
-    from 0deg at 50% 50%,
-    rgba(16, 185, 129, 0) 0deg,
-    rgba(16, 185, 129, 0.05) 60deg,
-    rgba(16, 185, 129, 0.25) 120deg,
-    rgba(16, 185, 129, 0) 125deg
-  );
+    linear-gradient(to right, rgba(0, 0, 0, 0.03) 1px, transparent 1px),
+    linear-gradient(to bottom, rgba(0, 0, 0, 0.03) 1px, transparent 1px);
 }
