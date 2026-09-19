@@ -21,7 +21,7 @@ import {
   ArrowDown,
   Image as ImageIcon
 } from 'lucide-react';
-import { Article } from '../hooks/useWarRoom';
+import { Article, useWarRoom } from '../hooks/useWarRoom';
 
 interface CrisisWarRoomViewProps {
   articles: Article[];
@@ -123,6 +123,8 @@ export const CrisisWarRoomView: React.FC<CrisisWarRoomViewProps> = ({
   onEscalateVoice,
   loading
 }) => {
+  const { pulsingArticleIds } = useWarRoom();
+
   // Primary Tabs Filter: 'all' | 'critical' | 'infosys'
   const [primaryFilter, setPrimaryFilter] = useState<'all' | 'critical' | 'infosys'>('all');
 
@@ -233,15 +235,27 @@ export const CrisisWarRoomView: React.FC<CrisisWarRoomViewProps> = ({
         // Secondary source (strictly filters by high-level ingestion engine / api_source)
         if (sourceFilter !== 'All' && sourceFilter !== 'ALL') {
           const apiSrc = (article.api_source || '').toLowerCase();
-          if (sourceFilter === 'Google News RSS') {
-            if (!apiSrc.includes('google') && !apiSrc.includes('rss')) return false;
-            if (apiSrc.includes('publisher') || apiSrc.includes('et') || apiSrc.includes('institutional')) return false;
+          if (sourceFilter === 'NewsAPI') {
+            if (!apiSrc.includes('newsapi')) return false;
+          } else if (sourceFilter === 'Currents API') {
+            if (!apiSrc.includes('currents')) return false;
+          } else if (sourceFilter === 'GNews') {
+            if (!apiSrc.includes('gnews')) return false;
+          } else if (sourceFilter === 'NewsData') {
+            if (!apiSrc.includes('newsdata')) return false;
+          } else if (sourceFilter === 'The Guardian') {
+            if (!apiSrc.includes('guardian')) return false;
+          } else if (sourceFilter === 'Bluesky Social') {
+            if (!apiSrc.includes('bluesky')) return false;
+          } else if (sourceFilter === 'Nostr Relay Wire') {
+            if (!apiSrc.includes('nostr')) return false;
           } else if (sourceFilter === 'GDELT DOC') {
             if (!apiSrc.includes('gdelt')) return false;
+          } else if (sourceFilter === 'Google News RSS') {
+            if (!apiSrc.includes('google') && !apiSrc.includes('rss')) return false;
+            if (apiSrc.includes('publisher') || apiSrc.includes('et') || apiSrc.includes('institutional')) return false;
           } else if (sourceFilter === 'Institutional') {
             if (!apiSrc.includes('institutional') && !apiSrc.includes('et') && !apiSrc.includes('publisher')) return false;
-          } else if (sourceFilter === 'NewsAPI') {
-            if (!apiSrc.includes('newsapi')) return false;
           }
         }
 
@@ -417,11 +431,15 @@ export const CrisisWarRoomView: React.FC<CrisisWarRoomViewProps> = ({
           onChange={(e) => setSourceFilter(e.target.value)}
           className="bg-slate-50 border border-slate-200 text-slate-700 text-sm rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-rose-500 transition-all"
         >
-          <option value="All">Source: All</option>
-          <option value="Google News RSS">Google News RSS</option>
-          <option value="GDELT DOC">GDELT DOC 2.0 (Global Discovery)</option>
-          <option value="Institutional">Institutional Publisher Wires (ET, Mint, BS)</option>
+          <option value="All">Source: All (Pure-API Matrix)</option>
           <option value="NewsAPI">NewsAPI (Global Aggregator)</option>
+          <option value="Currents API">Currents Global News</option>
+          <option value="GNews">GNews AI-Curated Wire</option>
+          <option value="NewsData">NewsData Archive</option>
+          <option value="The Guardian">The Guardian API</option>
+          <option value="Bluesky Social">Bluesky Social (AT Protocol)</option>
+          <option value="Nostr Relay Wire">Nostr Relays (WebSocket)</option>
+          <option value="GDELT DOC">GDELT DOC 2.0 (Standby)</option>
         </select>
 
         {/* Time dropdown */}
@@ -526,10 +544,14 @@ export const CrisisWarRoomView: React.FC<CrisisWarRoomViewProps> = ({
                 'Intelligence'
               ];
 
+              const isPulsing = pulsingArticleIds?.has(article.id);
+
               return (
                 <div
                   key={article.id}
                   className={`rounded-xl border transition-all duration-200 shadow-2xs hover:shadow-xs p-4 sm:p-5 ${
+                    isPulsing ? 'ring-2 ring-rose-500 shadow-lg shadow-rose-500/20 animate-pulse ' : ''
+                  }${
                     isCritical
                       ? 'bg-rose-50/20 border-rose-200 border-l-4 border-l-rose-600'
                       : 'bg-white border-slate-200/90'

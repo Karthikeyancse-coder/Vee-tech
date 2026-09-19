@@ -142,6 +142,12 @@ export const IntelligenceTrendAnalysisView: React.FC<IntelligenceTrendAnalysisVi
           if (!apiSrc.includes('institutional') && !apiSrc.includes('et') && !apiSrc.includes('publisher')) return false;
         } else if (sourceFilter === 'NewsAPI') {
           if (!apiSrc.includes('newsapi')) return false;
+        } else if (sourceFilter === 'Currents API') {
+          if (!apiSrc.includes('currents')) return false;
+        } else if (sourceFilter === 'Bluesky Social') {
+          if (!apiSrc.includes('bluesky')) return false;
+        } else if (sourceFilter === 'Nostr Relay Wire') {
+          if (!apiSrc.includes('nostr')) return false;
         }
       }
 
@@ -1020,10 +1026,13 @@ export const IntelligenceTrendAnalysisView: React.FC<IntelligenceTrendAnalysisVi
             className="bg-slate-50 border border-slate-200 text-slate-700 text-sm rounded-lg px-3 py-2 outline-none focus:ring-2 focus:ring-rose-500 transition-all"
           >
             <option value="All">Source: All</option>
-            <option value="Google News RSS">Google News RSS</option>
-            <option value="GDELT DOC">GDELT DOC 2.0 (Global Discovery)</option>
-            <option value="Institutional">Institutional Publisher Wires (ET, Mint, BS)</option>
             <option value="NewsAPI">NewsAPI (Global Aggregator)</option>
+            <option value="Currents API">Currents Global News</option>
+            <option value="Bluesky Social">Bluesky Social Wire</option>
+            <option value="Nostr Relay Wire">Nostr Relay Wire</option>
+            <option value="GDELT DOC">GDELT DOC 2.0 (Standby)</option>
+            <option value="Google News RSS">Google News RSS (Decommissioned)</option>
+            <option value="Institutional">Institutional Publisher Wires (Decommissioned)</option>
           </select>
 
           {/* Risk Level Dropdown */}

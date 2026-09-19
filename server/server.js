@@ -2,7 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import axios from 'axios';
-import { randomUUID } from 'node:crypto';
+import { randomUUID, createHash } from 'node:crypto';
 import { createClient } from '@supabase/supabase-js';
 import {
   sendSlackAlert,
@@ -16,9 +16,16 @@ import {
   fetchLiveGoogleNews,
   startNewsStream,
   startLiveNewsFeed,
-  stopLiveNewsFeed
+  stopLiveNewsFeed,
+  sourceTelemetry
 } from './services/newsFetcher.js';
 
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+dotenv.config({ path: path.join(__dirname, '.env') });
 dotenv.config();
 
 // ============================================================================
@@ -42,6 +49,69 @@ export const supabase = (supabaseUrl && supabaseServiceKey)
       auth: { persistSession: false }
     })
   : null;
+
+// ============================================================================
+// SHA-256 CONTENT HASHING & ZERO-LATENCY PRE-DATABASE DEDUPLICATION
+// ============================================================================
+export const seenContentHashes = new Set();
+
+/**
+ * Generates an SHA-256 cryptographic hash over normalized title and url.
+ * @param {{ title?: string, url?: string }} article
+ * @returns {string} Hex-encoded SHA-256 hash
+ */
+export function generateContentHash(article) {
+  const normTitle = String(article?.title || '').trim().toLowerCase().replace(/\s+/g, ' ');
+  const normUrl = String(article?.url || '').trim().toLowerCase();
+  return createHash('sha256').update(`${normTitle}-${normUrl}`).digest('hex');
+}
+
+/**
+ * Hydrates in-memory seenContentHashes Set from Supabase on startup
+ * to enable O(1) deduplication rejection before any database query or LLM call.
+ */
+export async function hydrateSeenContentHashes() {
+  if (!supabase) return;
+  try {
+    console.log('[Deduplicator] Hydrating in-memory seenContentHashes from Supabase...');
+    const { data, error } = await supabase
+      .from('articles')
+      .select('title, url')
+      .order('ingested_at', { ascending: false })
+      .limit(3000);
+
+    if (error) {
+      console.warn('[Deduplicator] ⚠️ Failed to hydrate seenContentHashes:', error.message);
+      return;
+    }
+
+    if (Array.isArray(data)) {
+      for (const item of data) {
+        const hash = generateContentHash(item);
+        seenContentHashes.add(hash);
+      }
+      console.log(`[Deduplicator] ✅ Hydrated ${seenContentHashes.size} content hashes into memory for O(1) deduplication.`);
+    }
+  } catch (err) {
+    console.warn('[Deduplicator] ⚠️ Exception hydrating content hashes:', err.message);
+  }
+}
+
+// ============================================================================
+// SUPABASE REALTIME BROADCAST ENGINE ('crisis-war-room')
+// ============================================================================
+let warRoomChannel = null;
+
+export function getWarRoomChannel() {
+  if (!supabase) return null;
+  if (!warRoomChannel) {
+    warRoomChannel = supabase.channel('crisis-war-room');
+    warRoomChannel.subscribe((status) => {
+      console.log(`[Realtime Broadcast] 'crisis-war-room' channel status: ${status}`);
+    });
+  }
+  return warRoomChannel;
+}
 
 // In-Memory Fallback Caches (Maintains zero-lag operation if external DB is disconnected)
 const memoryArticles = [];
@@ -181,11 +251,107 @@ export function normalizeTriage(triage) {
   return triage;
 }
 
+// ============================================================================
+// SIMILARITY CALCULATION & DEDUPLICATION AUDIT
+// ============================================================================
+export function calculateStringSimilarity(str1, str2) {
+  const s1 = (str1 || '').toLowerCase().trim();
+  const s2 = (str2 || '').toLowerCase().trim();
+  if (s1 === s2) return 1.0;
+  if (!s1 || !s2) return 0.0;
+  
+  const words1 = s1.replace(/[^\w\s]/g, '').split(/\s+/).filter(Boolean);
+  const words2 = s2.replace(/[^\w\s]/g, '').split(/\s+/).filter(Boolean);
+  const set1 = new Set(words1);
+  const set2 = new Set(words2);
+  
+  const intersection = new Set([...set1].filter(x => set2.has(x)));
+  const union = new Set([...set1, ...set2]);
+  if (union.size === 0) return 0.0;
+  return Number((intersection.size / union.size).toFixed(3));
+}
+
+export const droppedDuplicatePairs = [];
+
+// ============================================================================
+// OLLAMA CONCURRENCY LIMITER & TRIAGE METRICS TRACKER
+// ============================================================================
+let ollamaQueue = Promise.resolve();
+let pendingQueueDepth = 0;
+const MAX_QUEUE_DEPTH = 35; // Maximum queue backlog before deterministic fallback
+
+export const cycleTriageStats = {
+  cycleId: 0,
+  sentToOllama: 0,
+  succeeded: 0,
+  fallback: 0,
+  fallbackReasons: {
+    timeout: 0,
+    error: 0,
+    queueFull: 0,
+    other: 0
+  },
+  latencies: []
+};
+
+export function startNewTriageCycle(cycleId) {
+  cycleTriageStats.cycleId = cycleId;
+  cycleTriageStats.sentToOllama = 0;
+  cycleTriageStats.succeeded = 0;
+  cycleTriageStats.fallback = 0;
+  cycleTriageStats.fallbackReasons = { timeout: 0, error: 0, queueFull: 0, other: 0 };
+  cycleTriageStats.latencies = [];
+}
+
+export function logCycleTriageSummary() {
+  const avgLat = cycleTriageStats.latencies.length > 0
+    ? (cycleTriageStats.latencies.reduce((a, b) => a + b, 0) / cycleTriageStats.latencies.length).toFixed(0)
+    : 0;
+  console.log(`\n================== [OLLAMA TRIAGE CYCLE METRICS: Cycle #${cycleTriageStats.cycleId}] ==================`);
+  console.log(`📊 Total Articles Sent to Ollama: ${cycleTriageStats.sentToOllama}`);
+  console.log(`✅ Succeeded with Real Model:    ${cycleTriageStats.succeeded} (Avg Latency: ${avgLat}ms)`);
+  console.log(`⚠️ Hit Deterministic Fallback:  ${cycleTriageStats.fallback}`);
+  console.log(`   - Timeouts (>45s):            ${cycleTriageStats.fallbackReasons.timeout}`);
+  console.log(`   - Model Errors/HTTP Fail:     ${cycleTriageStats.fallbackReasons.error}`);
+  console.log(`   - Queue Full (>35 queued):    ${cycleTriageStats.fallbackReasons.queueFull}`);
+  console.log(`============================================================================\n`);
+}
+
 /**
  * Triage raw news content using local Ollama model (Qwen 2.5).
- * Strictly enforces JSON output schema, client-only risk rules, and fallback clamps.
+ * Processes requests sequentially through a concurrency limiter (queue)
+ * to avoid overloading local GPU/CPU VRAM.
  */
 export async function triageArticle(rawContent, title = '', sourceName = '') {
+  cycleTriageStats.sentToOllama++;
+
+  if (pendingQueueDepth >= MAX_QUEUE_DEPTH) {
+    cycleTriageStats.fallback++;
+    cycleTriageStats.fallbackReasons.queueFull++;
+    console.warn(`[Ollama Queue] ⚠️ Queue backlog exceeded (${pendingQueueDepth} pending). Triggering deterministic fallback.`);
+    return deterministicFallbackTriage(rawContent, title);
+  }
+
+  pendingQueueDepth++;
+
+  // Serial execution queue: each prompt executes after the previous one finishes
+  return new Promise((resolve) => {
+    ollamaQueue = ollamaQueue.then(async () => {
+      try {
+        const result = await executeOllamaTriage(rawContent, title, sourceName);
+        resolve(result);
+      } catch (err) {
+        cycleTriageStats.fallback++;
+        cycleTriageStats.fallbackReasons.error++;
+        resolve(deterministicFallbackTriage(rawContent, title));
+      } finally {
+        pendingQueueDepth = Math.max(0, pendingQueueDepth - 1);
+      }
+    });
+  });
+}
+
+async function executeOllamaTriage(rawContent, title = '', sourceName = '') {
   const prompt = [
     'You are the Vee-Alert crisis intelligence triage agent for enterprise primary client Infosys.',
     'TARGET CLIENT: Infosys.',
@@ -275,12 +441,21 @@ export async function triageArticle(rawContent, title = '', sourceName = '') {
 
       const normalized = normalizeTriage(rawTriage);
       const latencyMs = Date.now() - tStart;
+      cycleTriageStats.succeeded++;
+      cycleTriageStats.latencies.push(latencyMs);
       console.log(`[Ollama Triage] ✅ Successfully triaged via model=ollama:${OLLAMA_MODEL} for "${(title || rawContent).slice(0, 45)}..." (Latency: ${latencyMs}ms)`);
       return normalized;
     }
   } catch (error) {
     const latencyMs = Date.now() - tStart;
-    console.warn(`[Ollama Triage] ❌ Inference failed after ${latencyMs}ms (${error.code || error.message}). Status: ${error.response?.status || 'N/A'}. Triggering deterministic fallback.`);
+    const isTimeout = error.code === 'ECONNABORTED' || error.name === 'AbortError' || error.message?.includes('timeout') || latencyMs >= 44000;
+    cycleTriageStats.fallback++;
+    if (isTimeout) {
+      cycleTriageStats.fallbackReasons.timeout++;
+    } else {
+      cycleTriageStats.fallbackReasons.error++;
+    }
+    console.warn(`[Ollama Triage] ❌ Inference failed after ${latencyMs}ms (${error.code || error.message}). Status: ${error.response?.status || 'N/A'}. Reason: ${isTimeout ? 'Timeout (>45s)' : 'Error'}. Triggering deterministic fallback.`);
   }
 
   // Deterministic Local Fallback Triage
@@ -433,6 +608,16 @@ export async function processIngest(payload) {
   const normalizedUrl = url ? String(url).trim() : null;
 
   // ============================================================================
+  // PHASE 0: SHA-256 PRE-DATABASE O(1) DEDUPLICATION INTERCEPT
+  // Reject existing hashes in O(1) time before any database queries or LLM calls occur
+  // ============================================================================
+  const contentHash = generateContentHash({ title: effectiveTitle, url: normalizedUrl });
+  if (seenContentHashes.has(contentHash)) {
+    console.log(`[Deduplicator] ⚡ DROPPED DUPLICATE (SHA-256 Hash Match): "${effectiveTitle.slice(0, 55)}..." [${contentHash.slice(0, 8)}]`);
+    return { success: true, skipped: true, reason: 'Duplicate article detected (SHA-256 content hash)' };
+  }
+
+  // ============================================================================
   // STEP 2: DEDUPLICATION CHECK
   // Check if an article with the exact same URL OR Title already exists
   // ============================================================================
@@ -441,7 +626,7 @@ export async function processIngest(payload) {
       if (normalizedUrl) {
         const { data: byUrl } = await supabase
           .from('articles')
-          .select('id')
+          .select('id, url, title, api_source')
           .eq('url', normalizedUrl)
           .limit(1);
 
@@ -454,13 +639,29 @@ export async function processIngest(payload) {
       if (effectiveTitle) {
         const { data: byTitle } = await supabase
           .from('articles')
-          .select('id')
+          .select('id, title, api_source')
           .eq('title', effectiveTitle)
           .limit(1);
 
         if (byTitle && byTitle.length > 0) {
-          console.log(`[Deduplicator] DROPPED DUPLICATE (Title match): "${effectiveTitle.slice(0, 55)}..."`);
-          return { success: true, skipped: true, reason: 'Duplicate article detected' };
+          const matchedTitle = byTitle[0].title;
+          const similarity = calculateStringSimilarity(effectiveTitle, matchedTitle);
+          const pair = {
+            incomingTitle: effectiveTitle,
+            matchedTitle,
+            similarityScore: similarity,
+            incomingSource: api_source,
+            matchedSource: byTitle[0].api_source,
+            timestamp: new Date().toISOString()
+          };
+          droppedDuplicatePairs.push(pair);
+          if (droppedDuplicatePairs.length > 100) droppedDuplicatePairs.shift();
+
+          console.log(`[Deduplicator] 🔁 DROPPED DUPLICATE (Title match):`);
+          console.log(`   Incoming:  "${effectiveTitle}" [${api_source}]`);
+          console.log(`   Existing:  "${matchedTitle}" [${byTitle[0].api_source || 'DB'}]`);
+          console.log(`   Similarity Score: ${(similarity * 100).toFixed(1)}%`);
+          return { success: true, skipped: true, reason: 'Duplicate article detected', pair };
         }
       }
     } catch (checkErr) {
@@ -472,16 +673,29 @@ export async function processIngest(payload) {
       (a) => (normalizedUrl && a.url === normalizedUrl) || (effectiveTitle && a.title === effectiveTitle)
     );
     if (existing) {
-      console.log(`[Deduplicator] DROPPED DUPLICATE (memory): "${effectiveTitle.slice(0, 55)}..."`);
-      return { success: true, skipped: true, reason: 'Duplicate article detected' };
+      const similarity = calculateStringSimilarity(effectiveTitle, existing.title);
+      const pair = {
+        incomingTitle: effectiveTitle,
+        matchedTitle: existing.title,
+        similarityScore: similarity,
+        incomingSource: api_source,
+        matchedSource: existing.api_source || 'Memory',
+        timestamp: new Date().toISOString()
+      };
+      droppedDuplicatePairs.push(pair);
+      if (droppedDuplicatePairs.length > 100) droppedDuplicatePairs.shift();
+
+      console.log(`[Deduplicator] 🔁 DROPPED DUPLICATE (Title match in memory):`);
+      console.log(`   Incoming:  "${effectiveTitle}" [${api_source}]`);
+      console.log(`   Existing:  "${existing.title}" [${existing.api_source || 'Memory'}]`);
+      console.log(`   Similarity Score: ${(similarity * 100).toFixed(1)}%`);
+      return { success: true, skipped: true, reason: 'Duplicate article detected', pair };
     }
   }
 
   // ============================================================================
   // PHASE 1 GUARDRAIL: Strict entity keyword filter
   // Drops any article that does NOT mention our 4 target entities.
-  // This prevents Billie Eilish, Lakers merch, and other off-topic noise
-  // from reaching Ollama GPU inference or polluting the Supabase database.
   // ============================================================================
   const TARGET_ENTITY_GUARDRAIL = /\b(Infosys|TCS|Tata Consultancy Services|Wipro|Accenture)\b/i;
   const articleText = `${effectiveTitle} ${raw_content}`;
@@ -490,7 +704,7 @@ export async function processIngest(payload) {
     return { success: true, skipped: true, reason: 'Failed keyword guardrail' };
   }
 
-  console.log(`[Pipeline] >>> NEW ARTICLE DISCOVERED: "${effectiveTitle.slice(0, 55)}..." [${api_source}] → Sending to AI Triage...`);
+  console.log(`[Pipeline] >>> ARTICLE QUALIFIED: "${effectiveTitle.slice(0, 55)}..." [${api_source}] → Enqueuing for Ollama Triage...`);
 
   // Correlation ID tracking across all stages
   const correlation_id = payload?.correlation_id || `corr_${Date.now()}_${Math.random().toString(36).substring(2, 7)}`;
@@ -552,6 +766,27 @@ export async function processIngest(payload) {
     dbForkPromise,
     Promise.all(dispatchPromises)
   ]);
+
+  // Record SHA-256 hash in memory to guarantee future O(1) deduplication
+  seenContentHashes.add(contentHash);
+
+  // ZERO-OVERHEAD SUPABASE REALTIME BROADCAST FOR CRITICAL & HIGH ALERTS (<100ms in-memory)
+  if (supabase && (triage.risk_level === 'Critical' || triage.risk_level === 'High')) {
+    try {
+      console.log(`[Realtime Broadcast] 🚨 Dispatching broadcast alert to 'crisis-war-room' for [${triage.risk_level}] "${effectiveTitle.slice(0, 45)}..."`);
+      supabase.channel('crisis-war-room').send({
+        type: 'broadcast',
+        event: 'new_triaged_alert',
+        payload: insertedArticle
+      }).then(() => {
+        console.log(`[Realtime Broadcast] ⚡ Broadcast dispatched successfully to 'crisis-war-room'`);
+      }).catch((bErr) => {
+        console.warn('[Realtime Broadcast] ⚠️ Broadcast send notice:', bErr.message);
+      });
+    } catch (broadcastErr) {
+      console.warn('[Realtime Broadcast] ⚠️ Broadcast dispatch error:', broadcastErr.message);
+    }
+  }
 
   // Determine actual delivery vs skipped channels (Item 1 requirement)
   const dispatched_channels = [];
@@ -679,6 +914,115 @@ app.get('/api/health', async (_req, res) => {
   });
 });
 
+// GET /api/sources - Configured intelligence sources status & telemetry
+app.get('/api/sources', (_req, res) => {
+  const sourcesConfig = [
+    {
+      id: 'newsapi',
+      name: 'NewsAPI (Global Aggregator)',
+      type: 'REST API',
+      configured: Boolean((process.env.NEWSAPI_KEY || '').trim()),
+      provider: 'NewsAPI.org',
+      category: 'Aggregator',
+      intervalSec: 60
+    },
+    {
+      id: 'gdelt',
+      name: 'GDELT DOC 2.0 (Global Discovery)',
+      type: 'REST API',
+      configured: true,
+      provider: 'GDELT Project',
+      category: 'Discovery',
+      intervalSec: 60
+    },
+    {
+      id: 'currents',
+      name: 'Currents Global News API',
+      type: 'REST API',
+      configured: Boolean((process.env.CURRENTS_API_KEY || '').trim()),
+      provider: 'Currents API',
+      category: 'Aggregator',
+      intervalSec: 60
+    },
+    {
+      id: 'bluesky',
+      name: 'Bluesky Social Wire (AT Protocol)',
+      type: 'AT Protocol',
+      configured: true,
+      provider: 'Bluesky Network',
+      category: 'Social Wire',
+      intervalSec: 45
+    },
+    {
+      id: 'nostr',
+      name: 'Nostr Relay Wire (Decentralized kind:1)',
+      type: 'WebSocket',
+      configured: true,
+      provider: 'Nostr Relays (nos.lol, primal.net, damus.io)',
+      category: 'Social Wire',
+      intervalSec: 45
+    },
+    {
+      id: 'googlenews',
+      name: 'Google News RSS (Decommissioned)',
+      type: 'XML Stream',
+      configured: false,
+      provider: 'Google News Syndicate (Decommissioned)',
+      category: 'Wire',
+      intervalSec: 30
+    },
+    {
+      id: 'institutional',
+      name: 'Institutional Publisher Wires (Decommissioned)',
+      type: 'RSS/XML',
+      configured: false,
+      provider: 'Financial Wire Feeds (Decommissioned)',
+      category: 'Institutional',
+      intervalSec: 30
+    },
+    {
+      id: 'gnews',
+      name: 'GNews AI-Curated Wire',
+      type: 'REST API',
+      configured: Boolean((process.env.GNEWS_API_KEY || '').trim()),
+      provider: 'GNews.io',
+      category: 'Aggregator',
+      intervalSec: 60
+    },
+    {
+      id: 'newsdata',
+      name: 'NewsData.io Real-Time Archive',
+      type: 'REST API',
+      configured: Boolean((process.env.NEWSDATA_API_KEY || '').trim()),
+      provider: 'NewsData.io',
+      category: 'Archive',
+      intervalSec: 60
+    },
+    {
+      id: 'guardian',
+      name: 'The Guardian Content API',
+      type: 'REST API',
+      configured: Boolean((process.env.GUARDIAN_API_KEY || '').trim()),
+      provider: 'The Guardian OpenPlatform',
+      category: 'Publisher',
+      intervalSec: 60
+    }
+  ];
+
+  const enrichedSources = sourcesConfig.map((s) => {
+    const telem = sourceTelemetry[s.id] || {};
+    return {
+      ...s,
+      lastPolled: telem.lastPolled || null,
+      lastStatus: telem.lastStatus || (s.configured ? 'Operational' : 'Disabled'),
+      lastCount: typeof telem.lastCount === 'number' ? telem.lastCount : 0,
+      lastNewArticle: telem.lastNewArticle || null
+    };
+  });
+
+  res.json({ sources: enrichedSources });
+});
+
 // GET /api/articles - Fetch active crisis feeds
 app.get('/api/articles', async (_req, res) => {
   try {
@@ -767,44 +1111,99 @@ app.post('/api/news/fetch', async (_req, res) => {
   }
 });
 
+// GET /api/debug/triage-stats - Audit metrics and dropped duplicate pairs
+app.get('/api/debug/triage-stats', (_req, res) => {
+  return res.json({
+    cycleTriageStats,
+    droppedDuplicatePairs: droppedDuplicatePairs.slice(-20)
+  });
+});
+
 // ============================================================================
 // 6. SERVER LAUNCH & AUTOMATED BACKGROUND INGESTION ENGINE
 // ============================================================================
 let isBackgroundFetching = false;
+let currentCycleNumber = 0;
+
+async function initSourceTelemetryFromDb() {
+  if (!supabase) return;
+  try {
+    const { data: latestArticles, error } = await supabase
+      .from('articles')
+      .select('api_source, source_name, ingested_at, published_at')
+      .order('ingested_at', { ascending: false })
+      .limit(500);
+
+    if (!error && latestArticles && Array.isArray(latestArticles)) {
+      for (const art of latestArticles) {
+        const apiSrc = (art.api_source || '').toLowerCase();
+        const srcName = (art.source_name || '').toLowerCase();
+        let key = 'newsapi';
+        if (apiSrc.includes('currents') || srcName.includes('currents')) key = 'currents';
+        else if (apiSrc.includes('bluesky') || srcName.includes('bsky')) key = 'bluesky';
+        else if (apiSrc.includes('gnews') || srcName.includes('gnews')) key = 'gnews';
+        else if (apiSrc.includes('newsdata') || srcName.includes('newsdata')) key = 'newsdata';
+        else if (apiSrc.includes('gdelt') || srcName.includes('gdelt')) key = 'gdelt';
+        else if (apiSrc.includes('guardian') || srcName.includes('guardian')) key = 'guardian';
+        else if (apiSrc.includes('rss') || srcName.includes('google')) key = 'googlenews';
+        else if (srcName.includes('economic') || srcName.includes('mint') || srcName.includes('standard') || srcName.includes('reuters') || srcName.includes('bloomberg')) key = 'institutional';
+
+        if (sourceTelemetry[key] && !sourceTelemetry[key].lastNewArticle) {
+          sourceTelemetry[key].lastNewArticle = art.ingested_at || art.published_at;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[Telemetry] DB telemetry init notice:', err.message);
+  }
+}
 
 async function startBackgroundIngestion() {
   if (isBackgroundFetching) return;
   isBackgroundFetching = true;
+  currentCycleNumber++;
+  startNewTriageCycle(currentCycleNumber);
   try {
-    console.log('\n[Engine] ⚡ Initiating automated 60-second background fetch...');
-    await fetchMultiSourceNews(processIngest);
+    console.log(`\n[Engine] ⚡ Initiating automated background fetch (Cycle #${currentCycleNumber})...`);
+    await fetchMultiSourceNews(processIngest, currentCycleNumber);
+    logCycleTriageSummary();
   } catch (err) {
     console.error('[Engine] Background fetch error:', err.message);
   } finally {
     isBackgroundFetching = false;
-  setTimeout(startBackgroundIngestion, 45000); // Poll every 45 seconds
+    setTimeout(startBackgroundIngestion, 45000); // Poll every 45 seconds
   }
 }
 
-const isDirectRun = Boolean(process.argv[1] && (
-  process.argv[1].endsWith('server.js') ||
-  process.argv[1].endsWith('server')
+const isTestRun = process.env.NODE_ENV === 'test' || Boolean(process.argv[1] && (
+  process.argv[1].includes('test_verify') ||
+  process.argv[1].includes('test.') ||
+  process.argv[1].endsWith('test.js')
 ));
 
-if (isDirectRun && process.env.NODE_ENV !== 'test') {
+if (!isTestRun) {
   app.listen(PORT, async () => {
     console.log(`\n=============================================================`);
     console.log(`🚀 [Vee-Alert Backend] Listening on http://localhost:${PORT}`);
     console.log(`🧠 [Local AI Engine] Ollama model: ${OLLAMA_MODEL} at ${OLLAMA_BASE_URL}`);
     console.log(`📦 [Database] Supabase ${supabase ? 'Configured & Connected' : 'Not configured (In-memory fallback)'}`);
     console.log(`⚡ [SLA Target] Sub-120 seconds event-driven stream`);
-    console.log(`🛡️ [Deduplicator] URL & Title deduplication active`);
-    console.log(`📰 [News Sources] NewsAPI, GDELT DOC, The Guardian, and Verified Wire RSS`);
-    console.log(`⏱️ [Automated Ingestion] 60-second non-overlapping recursive engine active`);
+    console.log(`🛡️ [Deduplicator] SHA-256 Pre-Database O(1) deduplication active`);
+    console.log(`📰 [News Sources] Pure-API 7-Stream Matrix (NewsAPI, Currents, GNews, NewsData, Guardian, Bluesky, Nostr)`);
+    console.log(`⏱️ [Automated Ingestion] 45-second non-overlapping recursive engine active`);
     console.log(`=============================================================\n`);
 
     // Pre-warm local Ollama weights in VRAM to eliminate cold inference lag
     await warmupOllama();
+
+    // Hydrate SHA-256 content hashes from Supabase for instant O(1) deduplication
+    await hydrateSeenContentHashes();
+
+    // Hydrate source telemetry with most recent article timestamps from DB
+    await initSourceTelemetryFromDb();
+
+    // Initialize Realtime war room broadcast channel
+    getWarRoomChannel();
 
     // Start the automated continuous ingestion engine on server boot
     startBackgroundIngestion();

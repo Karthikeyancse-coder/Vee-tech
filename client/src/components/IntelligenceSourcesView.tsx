@@ -23,8 +23,11 @@ import {
   ShieldCheck,
   X,
   Radio,
-  Check
+  Check,
+  Share2,
+  Sparkles
 } from 'lucide-react';
+import axios from 'axios';
 import { useWarRoom, Article } from '../hooks/useWarRoom';
 
 interface IntelligenceSourcesViewProps {
@@ -35,15 +38,33 @@ interface SourceConfig {
   id: string;
   name: string;
   description: string;
-  type: 'REST API' | 'RSS/XML' | 'XML Stream';
+  type: 'REST API' | 'RSS/XML' | 'XML Stream' | 'AT Protocol' | 'WebSocket';
   category: string;
   intervalSec: number;
   tags: string[];
   icon: React.ComponentType<{ className?: string }>;
   iconTheme: string;
-  status: 'Operational' | 'Degraded' | 'Error' | 'Disabled';
+  status: 'Operational' | 'Degraded' | 'Error' | 'Disabled' | 'Decommissioned';
   provider: string;
   apiSourceMatch: string[];
+  lastPolled?: string | null;
+  lastStatus?: string;
+  lastCount?: number;
+  lastNewArticle?: string | null;
+}
+
+function formatRelativeTime(dateStr?: string | null): string {
+  if (!dateStr) return 'Just now';
+  const d = new Date(dateStr);
+  if (isNaN(d.getTime())) return 'Just now';
+  const diffSec = Math.max(0, Math.round((Date.now() - d.getTime()) / 1000));
+  if (diffSec < 15) return 'Just now';
+  if (diffSec < 60) return `${diffSec}s ago`;
+  const diffMin = Math.round(diffSec / 60);
+  if (diffMin < 60) return `${diffMin}m ago`;
+  const diffHours = Math.round(diffMin / 60);
+  if (diffHours < 24) return `${diffHours}h ago`;
+  return format(d, 'MMM dd, h:mm a');
 }
 
 export const IntelligenceSourcesView: React.FC<IntelligenceSourcesViewProps> = ({
@@ -86,46 +107,116 @@ export const IntelligenceSourcesView: React.FC<IntelligenceSourcesViewProps> = (
         apiSourceMatch: ['gdelt', 'gdelt doc 2.0', 'gdelt doc 2.0 (global discovery)']
       },
       {
-        id: 'guardian',
-        name: 'The Guardian Content API',
-        description: 'Official Guardian Media API (Not configured — coming soon).',
+        id: 'currents',
+        name: 'Currents Global News API',
+        description: 'Real-time multi-lingual global news stream covering enterprise and institutional movements.',
         type: 'REST API',
-        category: 'Publisher',
+        category: 'Aggregator',
         intervalSec: 60,
-        tags: ['REST API', 'News', 'UK', 'Not Configured'],
-        icon: Newspaper,
-        iconTheme: 'bg-slate-100 text-slate-400 border-slate-200',
-        status: 'Disabled',
-        provider: 'The Guardian OpenPlatform',
-        apiSourceMatch: ['guardian', 'the guardian', 'the guardian content api']
+        tags: ['REST API', 'Global News', 'Real-time', 'Verified'],
+        icon: Radio,
+        iconTheme: 'bg-teal-50 text-teal-600 border-teal-100',
+        status: 'Operational',
+        provider: 'Currents API',
+        apiSourceMatch: ['currents', 'currents api', 'currents global news']
+      },
+      {
+        id: 'bluesky',
+        name: 'Bluesky Social Wire',
+        type: 'REST API',
+        description: 'Decentralized AT Protocol public network stream monitoring real-time enterprise announcements.',
+        category: 'Social Wire',
+        intervalSec: 45,
+        tags: ['AT Protocol', 'Social Intelligence', 'Real-time', 'Decentralized'],
+        icon: Share2,
+        iconTheme: 'bg-sky-50 text-sky-600 border-sky-100',
+        status: 'Operational',
+        provider: 'Bluesky Network',
+        apiSourceMatch: ['bluesky', 'bluesky social']
+      },
+      {
+        id: 'nostr',
+        name: 'Nostr Relay Wire (Decentralized kind:1)',
+        description: 'Decentralized kind:1 text note firehose querying nos.lol, primal.net, and damus.io public relays with 5s clean teardown.',
+        type: 'WebSocket',
+        category: 'Social Wire',
+        intervalSec: 45,
+        tags: ['WebSocket', 'Decentralized', 'Nostr', 'Censorship-Resistant'],
+        icon: Radio,
+        iconTheme: 'bg-purple-50 text-purple-600 border-purple-100',
+        status: 'Operational',
+        provider: 'Nostr Public Relays',
+        apiSourceMatch: ['nostr', 'nostr relay wire']
       },
       {
         id: 'googlenews',
-        name: 'Google News RSS (Instant Wire)',
-        description: 'Real-time RSS feed for Google News with instant updates.',
+        name: 'Google News RSS (Decommissioned)',
+        description: 'Legacy RSS feed — decommissioned in favor of pure-API and WebSocket firehoses.',
         type: 'XML Stream',
         category: 'Wire',
         intervalSec: 30,
-        tags: ['XML Stream', 'News', 'Real-time', 'International'],
+        tags: ['Decommissioned', 'Legacy'],
         icon: Rss,
-        iconTheme: 'bg-amber-50 text-amber-600 border-amber-100',
-        status: 'Operational',
-        provider: 'Google News Syndicate',
+        iconTheme: 'bg-slate-100 text-slate-400 border-slate-200',
+        status: 'Decommissioned',
+        provider: 'Google News Syndicate (Decommissioned)',
         apiSourceMatch: ['googlenews', 'google news rss', 'rss', 'google news']
       },
       {
         id: 'institutional',
-        name: 'Institutional Publisher Wires (ET, Mint, BS)',
-        description: 'RSS/XML feeds from Economic Times, Mint, Business Standard and other institutional sources.',
+        name: 'Institutional Publisher Wires (Decommissioned)',
+        description: 'Legacy RSS/XML publisher feeds — decommissioned in favor of pure-API and WebSocket firehoses.',
         type: 'RSS/XML',
         category: 'Institutional',
         intervalSec: 30,
-        tags: ['RSS/XML', 'Finance', 'India', 'Institutional'],
+        tags: ['Decommissioned', 'Legacy'],
         icon: Building2,
-        iconTheme: 'bg-blue-50 text-blue-600 border-blue-100',
+        iconTheme: 'bg-slate-100 text-slate-400 border-slate-200',
+        status: 'Decommissioned',
+        provider: 'Financial Wire Feeds (Decommissioned)',
+        apiSourceMatch: ['economic times', 'mint', 'business standard', 'wire', 'institutional', 'et rss']
+      },
+      {
+        id: 'gnews',
+        name: 'GNews AI-Curated Wire',
+        description: 'AI-curated global news index filtering Tier-1 enterprise IT and consulting events.',
+        type: 'REST API',
+        category: 'Aggregator',
+        intervalSec: 60,
+        tags: ['REST API', 'AI-Curated', 'Global', 'Real-time'],
+        icon: Sparkles,
+        iconTheme: 'bg-emerald-50 text-emerald-600 border-emerald-100',
         status: 'Operational',
-        provider: 'Financial Wire Feeds',
-        apiSourceMatch: ['economic times', 'mint', 'business standard', 'wire', 'institutional']
+        provider: 'GNews.io',
+        apiSourceMatch: ['gnews', 'gnews global wire']
+      },
+      {
+        id: 'newsdata',
+        name: 'NewsData.io Real-Time Archive',
+        description: 'Global real-time news archive search tracking multi-national IT service movements.',
+        type: 'REST API',
+        category: 'Archive',
+        intervalSec: 60,
+        tags: ['REST API', 'News Archive', 'Real-time', 'Global'],
+        icon: Database,
+        iconTheme: 'bg-indigo-50 text-indigo-600 border-indigo-100',
+        status: 'Operational',
+        provider: 'NewsData.io',
+        apiSourceMatch: ['newsdata', 'newsdata wire']
+      },
+      {
+        id: 'guardian',
+        name: 'The Guardian Content API',
+        description: 'Official Guardian OpenPlatform API for global editorial coverage.',
+        type: 'REST API',
+        category: 'Publisher',
+        intervalSec: 60,
+        tags: ['REST API', 'News', 'UK', 'Premium'],
+        icon: Newspaper,
+        iconTheme: 'bg-violet-50 text-violet-600 border-violet-100',
+        status: 'Operational',
+        provider: 'The Guardian OpenPlatform',
+        apiSourceMatch: ['guardian', 'the guardian', 'the guardian content api', 'the guardian api']
       }
     ],
     []
@@ -157,6 +248,46 @@ export const IntelligenceSourcesView: React.FC<IntelligenceSourcesViewProps> = (
     format(new Date(), 'MMM dd, yyyy h:mm a')
   );
 
+  // Synchronize live configuration status and polling telemetry from backend /api/sources
+  useEffect(() => {
+    const apiBase = (import.meta as any).env?.VITE_API_BASE_URL || 'http://localhost:5000';
+    const fetchSourcesData = () => {
+      axios
+        .get(`${apiBase}/api/sources`)
+        .then((res) => {
+          if (res.data?.sources && Array.isArray(res.data.sources)) {
+            const dataMap = new Map<string, any>();
+            res.data.sources.forEach((s: any) => {
+              dataMap.set(s.id, s);
+            });
+            setSources((prev) =>
+              prev.map((src) => {
+                if (dataMap.has(src.id)) {
+                  const s = dataMap.get(src.id);
+                  return {
+                    ...src,
+                    status: s.configured ? 'Operational' : 'Disabled',
+                    lastPolled: s.lastPolled,
+                    lastStatus: s.lastStatus,
+                    lastCount: s.lastCount,
+                    lastNewArticle: s.lastNewArticle
+                  };
+                }
+                return src;
+              })
+            );
+          }
+        })
+        .catch((err) => {
+          console.warn('[IntelligenceSourcesView] Backend /api/sources check notice:', err.message);
+        });
+    };
+
+    fetchSourcesData();
+    const interval = setInterval(fetchSourcesData, 10000);
+    return () => clearInterval(interval);
+  }, []);
+
   useEffect(() => {
     const timer = setInterval(() => {
       setLastHealthCheck(format(new Date(), 'MMM dd, yyyy h:mm a'));
@@ -170,9 +301,13 @@ export const IntelligenceSourcesView: React.FC<IntelligenceSourcesViewProps> = (
     const stats: Record<string, { count: number; lastFetch: Date | null }> = {
       newsapi: { count: 0, lastFetch: null },
       gdelt: { count: 0, lastFetch: null },
-      guardian: { count: 0, lastFetch: null },
+      currents: { count: 0, lastFetch: null },
+      bluesky: { count: 0, lastFetch: null },
       googlenews: { count: 0, lastFetch: null },
-      institutional: { count: 0, lastFetch: null }
+      institutional: { count: 0, lastFetch: null },
+      gnews: { count: 0, lastFetch: null },
+      newsdata: { count: 0, lastFetch: null },
+      guardian: { count: 0, lastFetch: null }
     };
 
     articles.forEach((art) => {
@@ -182,7 +317,15 @@ export const IntelligenceSourcesView: React.FC<IntelligenceSourcesViewProps> = (
       const isValidTime = !isNaN(time.getTime());
 
       let matchedKey = 'newsapi';
-      if (apiSrc.includes('gdelt') || srcName.includes('gdelt')) {
+      if (apiSrc.includes('currents') || srcName.includes('currents')) {
+        matchedKey = 'currents';
+      } else if (apiSrc.includes('bluesky') || srcName.includes('bsky')) {
+        matchedKey = 'bluesky';
+      } else if (apiSrc.includes('gnews') || srcName.includes('gnews')) {
+        matchedKey = 'gnews';
+      } else if (apiSrc.includes('newsdata') || srcName.includes('newsdata')) {
+        matchedKey = 'newsdata';
+      } else if (apiSrc.includes('gdelt') || srcName.includes('gdelt')) {
         matchedKey = 'gdelt';
       } else if (apiSrc.includes('guardian') || srcName.includes('guardian')) {
         matchedKey = 'guardian';
@@ -200,10 +343,12 @@ export const IntelligenceSourcesView: React.FC<IntelligenceSourcesViewProps> = (
         matchedKey = 'newsapi';
       }
 
-      stats[matchedKey].count++;
-      if (isValidTime) {
-        if (!stats[matchedKey].lastFetch || time > stats[matchedKey].lastFetch!) {
-          stats[matchedKey].lastFetch = time;
+      if (stats[matchedKey]) {
+        stats[matchedKey].count++;
+        if (isValidTime) {
+          if (!stats[matchedKey].lastFetch || time > stats[matchedKey].lastFetch!) {
+            stats[matchedKey].lastFetch = time;
+          }
         }
       }
     });
@@ -547,17 +692,23 @@ export const IntelligenceSourcesView: React.FC<IntelligenceSourcesViewProps> = (
             const Icon = source.icon;
             const stats = sourceStats[source.id] || { count: 0, lastFetch: null };
 
-            // Format clean Last Fetch timestamp
-            let lastFetchTimeStr = '4:08 AM';
-            let lastFetchDateStr = 'Sep 19, 2026';
-            if (stats.lastFetch) {
-              lastFetchTimeStr = format(stats.lastFetch, 'h:mm a');
-              lastFetchDateStr = format(stats.lastFetch, 'MMM dd, yyyy');
+            // Determine Last New Article (from telemetry or matching DB articles)
+            let lastNewArticleTimeStr = 'None today';
+            let lastNewArticleDateStr = 'Awaiting match';
+            const newestArticleDate = source.lastNewArticle ? new Date(source.lastNewArticle) : stats.lastFetch;
+            if (newestArticleDate && !isNaN(newestArticleDate.getTime())) {
+              lastNewArticleTimeStr = format(newestArticleDate, 'h:mm a');
+              lastNewArticleDateStr = format(newestArticleDate, 'MMM dd, yyyy');
             }
+
+            // Determine Last Polled time & status
+            const lastPolledStr = formatRelativeTime(source.lastPolled);
+            const pollingStatusText = source.lastStatus || (source.status === 'Disabled' ? 'Disabled' : 'Operational');
+            const isPolledHealthy = pollingStatusText === 'Operational';
 
             const recordVolume = stats.count > 0 ? stats.count : source.id === 'newsapi' ? 1248 : source.id === 'gdelt' ? 856 : source.id === 'guardian' ? 412 : source.id === 'googlenews' ? 320 : 678;
 
-            const isInactive = source.status === 'Disabled' || source.id === 'guardian';
+            const isInactive = source.status === 'Disabled';
 
             return (
               <div
@@ -569,7 +720,7 @@ export const IntelligenceSourcesView: React.FC<IntelligenceSourcesViewProps> = (
                 }`}
               >
                 {/* LEFT SECTION: IDENTITY & TAGS */}
-                <div className="flex items-start gap-4 min-w-0 lg:w-[36%]">
+                <div className="flex items-start gap-4 min-w-0 lg:w-[32%]">
                   <div
                     className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 border ${source.iconTheme}`}
                   >
@@ -583,6 +734,14 @@ export const IntelligenceSourcesView: React.FC<IntelligenceSourcesViewProps> = (
                     <p className="text-xs text-slate-500 line-clamp-1 leading-relaxed">
                       {source.description}
                     </p>
+
+                    {/* Dual Telemetry Status Bar */}
+                    <div className="flex items-center gap-1.5 text-[11px] font-mono text-slate-600 bg-slate-50 border border-slate-200/70 px-2.5 py-1 rounded-lg w-fit">
+                      <span className={`w-1.5 h-1.5 rounded-full ${isInactive ? 'bg-slate-400' : isPolledHealthy ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
+                      <span>Last polled: <strong className="text-slate-800 font-semibold">{lastPolledStr}</strong></span>
+                      <span className="text-slate-300">·</span>
+                      <span>Newest: <strong className="text-slate-800 font-semibold">{lastNewArticleTimeStr}</strong></span>
+                    </div>
 
                     <div className="flex flex-wrap items-center gap-1.5 pt-0.5">
                       {source.tags.map((t) => (
@@ -602,7 +761,7 @@ export const IntelligenceSourcesView: React.FC<IntelligenceSourcesViewProps> = (
                 </div>
 
                 {/* CENTER SECTION: METRICS & STATUS */}
-                <div className="flex flex-wrap items-center justify-between sm:justify-start lg:justify-between gap-4 lg:gap-6 flex-1 border-t lg:border-t-0 pt-3 lg:pt-0 border-slate-100">
+                <div className="flex flex-wrap items-center justify-between sm:justify-start lg:justify-between gap-3 lg:gap-5 flex-1 border-t lg:border-t-0 pt-3 lg:pt-0 border-slate-100">
                   {/* Status Badge */}
                   <div className="flex items-center gap-1.5">
                     {isInactive ? (
@@ -631,17 +790,34 @@ export const IntelligenceSourcesView: React.FC<IntelligenceSourcesViewProps> = (
                     </div>
                   </div>
 
-                  {/* Last Fetch */}
+                  {/* METRIC 1: Last Polled */}
+                  <div className="flex items-center gap-2">
+                    <div className="w-7 h-7 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-center text-slate-500">
+                      <Activity className="w-3.5 h-3.5 text-slate-600" />
+                    </div>
+                    <div>
+                      <span className="text-[10px] text-slate-400 font-medium block">Last Polled</span>
+                      <div className="text-xs font-bold text-slate-800 font-mono leading-tight">
+                        {lastPolledStr}
+                        <span className={`text-[10px] font-medium block flex items-center gap-1 mt-0.5 ${isPolledHealthy ? 'text-emerald-600' : 'text-amber-600'}`}>
+                          <span className={`w-1 h-1 rounded-full ${isPolledHealthy ? 'bg-emerald-500' : 'bg-amber-500'}`} />
+                          {pollingStatusText}
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* METRIC 2: Last New Article */}
                   <div className="flex items-center gap-2">
                     <div className="w-7 h-7 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-center text-slate-500">
                       <Database className="w-3.5 h-3.5" />
                     </div>
                     <div>
-                      <span className="text-[10px] text-slate-400 font-medium block">Last Fetch</span>
+                      <span className="text-[10px] text-slate-400 font-medium block">Last New Article</span>
                       <div className="text-xs font-bold text-slate-800 font-mono leading-tight">
-                        {lastFetchTimeStr}
+                        {lastNewArticleTimeStr}
                         <span className="text-[10px] text-slate-400 font-normal block">
-                          {lastFetchDateStr}
+                          {lastNewArticleDateStr}
                         </span>
                       </div>
                     </div>
