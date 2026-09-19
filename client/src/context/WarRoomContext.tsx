@@ -95,7 +95,13 @@ export const WarRoomProvider: React.FC<{ children: ReactNode }> = ({ children })
       setError(null);
 
       if (isSupabaseConfigured && supabase) {
+        let simFailureCount = 0;
         const data = await retryWithBackoff(async () => {
+          // Test hook for Bug 5 verification: if triggered, simulate a network reset on attempt 1 then recover
+          if (typeof window !== 'undefined' && (window as any).__simulateSupabaseFailOnce && simFailureCount === 0) {
+            simFailureCount++;
+            throw new Error('TypeError: Failed to fetch (net::ERR_CONNECTION_RESET)');
+          }
           const { data: resData, error: sbError } = await supabase!
             .from('articles')
             .select('*')
@@ -127,6 +133,22 @@ export const WarRoomProvider: React.FC<{ children: ReactNode }> = ({ children })
 
   // 2. Singleton Supabase Realtime Subscription
   useEffect(() => {
+    if (typeof window !== 'undefined') {
+      (window as any).simulateSupabaseRetry = async () => {
+        (window as any).__simulateSupabaseFailOnce = true;
+        console.log('[Test Harness] Triggering simulated Supabase network failure to test retryWithBackoff...');
+        await fetchArticles(false);
+        (window as any).__simulateSupabaseFailOnce = false;
+      };
+
+      const params = new URLSearchParams(window.location.search);
+      if (params.get('simulateRetry') === 'true') {
+        setTimeout(() => {
+          (window as any).simulateSupabaseRetry();
+        }, 100);
+      }
+    }
+
     fetchArticles(true);
 
     let pollingInterval: ReturnType<typeof setInterval> | null = null;

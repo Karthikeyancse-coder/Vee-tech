@@ -1,6 +1,6 @@
 process.env.NODE_ENV = 'test';
 import { warmupOllama, triageArticle, processIngest, evaluateAlertRules } from './server.js';
-import { fetchGdeltDoc } from './services/newsFetcher.js';
+import { fetchGdeltDoc, fetchPublisherRss } from './services/newsFetcher.js';
 
 async function runVerification() {
   console.log('\n=============================================================');
@@ -49,7 +49,27 @@ async function runVerification() {
   // TEST 5: GDELT Cooldown Verification
   console.log('--- TEST 5: GDELT COOLDOWN AND TIMEOUT RESILIENCE ---');
   const gdeltResults = await fetchGdeltDoc();
-  console.log(`GDELT fetch completed safely without blocking. Result count: ${gdeltResults.length}`);
+  console.log(`GDELT fetch completed safely without blocking. Result count: ${gdeltResults.length}\n`);
+
+  // TEST 6: REAL LIVE RSS ARTICLE INGESTION (ITEM 4)
+  console.log('--- TEST 6: REAL LIVE RSS ARTICLE INGESTION & TELEMETRY ---');
+  const liveRssItems = await fetchPublisherRss();
+  if (liveRssItems && liveRssItems.length > 0) {
+    const realLiveArticle = { ...liveRssItems[0] };
+    const runId = Date.now();
+    realLiveArticle.correlation_id = `corr_live_rss_${runId}`;
+    realLiveArticle.url = `${realLiveArticle.url}#test-${runId}`;
+    realLiveArticle.title = `${realLiveArticle.title} [Live Feed Audit #${runId.toString().slice(-4)}]`;
+    console.log(`Live headline: "${realLiveArticle.title}"`);
+    console.log(`Live publisher: "${realLiveArticle.source_name}" [${realLiveArticle.api_source}]`);
+    console.log(`Feed publication timestamp: ${realLiveArticle.published_at}`);
+
+    const liveIngestResult = await processIngest(realLiveArticle);
+    console.log('Real Live Article Telemetry JSON:');
+    console.log(JSON.stringify(liveIngestResult.sla, null, 2));
+  } else {
+    console.log('No live RSS articles returned.');
+  }
 
   console.log('\n=============================================================');
   console.log('✅ ALL VERIFICATION SUITE TESTS COMPLETED');

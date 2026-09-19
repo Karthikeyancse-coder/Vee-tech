@@ -532,26 +532,41 @@ export async function processIngest(payload) {
 
   // PARALLEL FORK B: Evaluate rules and dispatch across multi-channels
   const { channels, requiresVoice } = evaluateAlertRules(triage);
-  const alertDispatches = [];
+  const dispatchPromises = [];
 
   if (channels.includes('Slack')) {
-    alertDispatches.push(sendSlackAlert(triage.five_bullet_summary, triage.risk_level, effectiveTitle, triage.risk_score));
+    dispatchPromises.push(sendSlackAlert(triage.five_bullet_summary, triage.risk_level, effectiveTitle, triage.risk_score));
   }
   if (channels.includes('WhatsApp')) {
-    alertDispatches.push(sendWhatsAppAlert(triage.five_bullet_summary, effectiveTitle, triage.risk_score));
+    dispatchPromises.push(sendWhatsAppAlert(triage.five_bullet_summary, effectiveTitle, triage.risk_score));
   }
   if (channels.includes('Email')) {
-    alertDispatches.push(sendEmailAlert(triage.five_bullet_summary, effectiveTitle, triage.risk_score));
+    dispatchPromises.push(sendEmailAlert(triage.five_bullet_summary, effectiveTitle, triage.risk_score));
   }
   if (requiresVoice || triage.requires_voice_escalation) {
-    alertDispatches.push(triggerVoiceCall(triage.five_bullet_summary, effectiveTitle));
+    dispatchPromises.push(triggerVoiceCall(triage.five_bullet_summary, effectiveTitle));
   }
 
-  // Execute Fork A (article insert) first — alert dispatches can run in parallel
-  const [insertedArticle] = await Promise.all([
+  // Execute Fork A (article insert) and Fork B (dispatches) concurrently
+  const [insertedArticle, dispatchResults] = await Promise.all([
     dbForkPromise,
-    Promise.all(alertDispatches)
+    Promise.all(dispatchPromises)
   ]);
+
+  // Determine actual delivery vs skipped channels (Item 1 requirement)
+  const dispatched_channels = [];
+  const skipped_channels = [];
+
+  for (const res of (dispatchResults || [])) {
+    if (!res) continue;
+    if (res.skipped === true) {
+      if (res.channel) skipped_channels.push(res.channel);
+    } else if (res.success === true) {
+      if (res.channel) dispatched_channels.push(res.channel);
+    } else {
+      if (res.channel) skipped_channels.push(res.channel);
+    }
+  }
 
   // DISPATCH TIMING: Capture alerted_at / dispatched_at
   const dispatched_at = Date.now();
@@ -576,19 +591,31 @@ export async function processIngest(payload) {
     insertedArticle.dispatched_at = dispatchedIso;
   }
 
-  // SLA LOGGING: Only insert into alert_logs if article was committed to Supabase
-  // (if _dbSuccess is false, the articleId doesn't exist in DB and the FK would crash)
-  const sla_seconds = Number(((dispatched_at - ingested_at) / 1000).toFixed(2));
-  const sla_breached = sla_seconds > 120;
+  /**
+   * SLA METRIC SPECIFICATION (Item 2 requirement):
+   * 1. sla_seconds_from_ingest: (dispatched_at - ingested_at) / 1000
+   *    Measures Vee-Alert's engine processing latency from the exact millisecond the article
+   *    was discovered/ingested into the pipeline to when all alerts were dispatched.
+   *    This is the contractual SLA metric evaluated against the sub-120 second guarantee,
+   *    as published_at from third-party RSS feeds may be hours delayed by publisher syndication.
+   *
+   * 2. total_seconds_from_publish: (dispatched_at - published_at) / 1000
+   *    Measures the macro time elapsed from the publisher's stated publication timestamp
+   *    to final alert dispatch.
+   */
+  const publishTimeMs = articlePayload.published_at ? new Date(articlePayload.published_at).getTime() : ingested_at;
+  const sla_seconds_from_ingest = Number(((dispatched_at - ingested_at) / 1000).toFixed(2));
+  const total_seconds_from_publish = Number(((dispatched_at - publishTimeMs) / 1000).toFixed(2));
+  const sla_breached = sla_seconds_from_ingest > 120;
   const latency_ms = dispatched_at - ingested_at;
 
   if (insertedArticle._dbSuccess === true) {
-    const primaryChannel = requiresVoice ? 'Voice' : (channels.includes('Slack') ? 'Slack' : (channels[0] || 'Slack'));
+    const primaryChannel = requiresVoice ? 'Voice' : (dispatched_channels.includes('Slack') ? 'Slack' : (dispatched_channels[0] || 'Slack'));
     await insertAlertLogRecord({
       article_id: insertedArticle.id,
       channel: primaryChannel,
       dispatched_at: dispatchedIso,
-      sla_seconds: sla_seconds,
+      sla_seconds: sla_seconds_from_ingest,
       sla_breached: sla_breached
     });
   } else {
@@ -602,16 +629,20 @@ export async function processIngest(payload) {
     latency_ms,
     sla: {
       correlation_id,
+      sla_metric_standard: 'ingested_at-based (measures internal pipeline velocity to dispatch)',
       published_at: articlePayload.published_at,
       ingested_at: ingestedIso,
       triaged_at: triagedIso,
       briefed_at: briefedIso,
       alerted_at: dispatchedIso,
       dispatched_at: dispatchedIso,
-      sla_seconds,
+      sla_seconds: sla_seconds_from_ingest,
+      sla_seconds_from_ingest,
+      total_seconds_from_publish,
       sla_breached,
       sla_target_seconds: 120,
-      dispatched_channels: channels
+      dispatched_channels,
+      skipped_channels
     }
   };
 }
