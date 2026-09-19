@@ -1,74 +1,201 @@
 # Vee-Alert: Real-Time AI Media Intelligence & Crisis War Room
 
+[![TypeScript](https://img.shields.io/badge/TypeScript-5.5-blue?logo=typescript)](https://www.typescriptlang.org/)
+[![React](https://img.shields.io/badge/React-18-61dafb?logo=react)](https://reactjs.org/)
+[![Vite](https://img.shields.io/badge/Vite-5.4-purple?logo=vite)](https://vitejs.org/)
+[![Node.js](https://img.shields.io/badge/Node.js-20+-green?logo=node.js)](https://nodejs.org/)
+[![Supabase](https://img.shields.io/badge/Supabase-Realtime%20Postgres-3ecf8e?logo=supabase)](https://supabase.com/)
+[![Ollama](https://img.shields.io/badge/Ollama-Qwen%202.5%3A7B-black?logo=ollama)](https://ollama.com/)
+
 **Target Client:** Infosys  
 **Tracked Competitors:** TCS, Wipro, Accenture  
-**SLA Guarantee:** Sub-120 seconds from publication to alert (Zero-Lag in-memory event-driven streaming)  
-**Data Sources:** Print ePapers (*The Economic Times*, *Mint*, etc. with page numbers and journalist bylines), Social Media (*Twitter/X*, *Instagram*, *Facebook*), and Global Tech Wires.  
-**Multi-Channel Push Alerts:** WhatsApp, Slack, Email, and Automated Voice Calls (Tier-4 Critical with interactive IVR).
+**SLA Guarantee:** Sub-120 seconds from publication to alert dispatch  
+**Real-Time Data Streams:** NewsAPI, GDELT DOC 2.0, The Guardian Open Platform, Publisher RSS (*The Economic Times*, *Google News Wire*)  
+**Multi-Channel Push Alerts:** Slack Webhook, WhatsApp Business Cloud, Executive Email, and Interactive Automated Voice Telephony (Tier-4 Critical)
 
 ---
 
-## Quick Start Guide
+## Architecture Overview
 
-Both the backend streaming server and frontend web app are already active:
+Vee-Alert is an enterprise-grade AI crisis intelligence platform engineered for proactive corporate risk monitoring and real-time competitor parity tracking.
 
-- **Frontend Application:** [http://localhost:5173](http://localhost:5173)
-- **Backend API:** [http://localhost:5000](http://localhost:5000)
-
-### To start manually in new terminals:
-```bash
-# Terminal 1: Backend API
-cd "d:\VEE TRACK\server"
-npm run dev
-
-# Terminal 2: Modern Animated UI
-cd "d:\VEE TRACK\client"
-npm run dev
+```
+[NewsAPI / GDELT / Guardian / RSS]
+              │
+              ▼
+   [Multi-Source Ingestion]
+   ├── Two-Phase Deduplication (Signature + URL/Title)
+   └── Strict Entity Keyword Guardrails (Infosys, TCS, Wipro, Accenture)
+              │
+              ▼
+    [Local AI Triage Engine]
+   ├── Qwen 2.5:7b (Local Ollama Inference via GPU)
+   └── Deterministic Heuristic Fallback (Zero Downtime)
+              │
+              ▼
+ [Supabase Realtime PostgreSQL] ◄──► [Real-Time WebSocket Sync]
+              │                               │
+              ▼                               ▼
+    [Multi-Channel Dispatch]       [VEE-ALERT Command Center]
+    ├── Slack Webhook              ├── Executive Dashboard
+    ├── WhatsApp Alerts            ├── Crisis War Room (5-Point Brief)
+    ├── Executive Email Dossier    ├── Competitor Intelligence Radar
+    └── Tier-4 Voice Call (DTMF)   ├── SLA Proof Engine (<120s Audit)
+                                   ├── Trend & Sentiment Analysis
+                                   └── Configured Intelligence Sources
 ```
 
 ---
 
-## Key Features Built for Industrial Mentor & Hackathon Judges
+## Key Features
 
-### 1. Crisis War Room (Mobile-First / C-Suite View)
-- Highly condensed **5-Bullet Executive Brief** strictly adhering to the specification:
-  1. *What happened*
-  2. *Why it matters*
-  3. *Risk score justification (1-10)*
-  4. *Competitor & market impact*
-  5. *Immediate recommended action*
-- One-tap rapid actions: `Acknowledge`, `Simulate Voice Call`, `Inspect Metadata`.
+### 1. Command Center & Crisis War Room
+- **5-Bullet Executive Briefing**:
+  1. *What happened*: Direct facts and source verification.
+  2. *Why it matters*: Immediate operational and market perception impact.
+  3. *Risk score justification*: Calibrated 1.0–10.0 score with threat categorization.
+  4. *Competitor & market impact*: Impact on TCS, Wipro, and Accenture market parity.
+  5. *Recommended action*: Operational and PR guidance for executive leadership.
+- **One-Tap Incident Actions**: Instant article acknowledgement, voice escalation trigger, and detailed source inspection modal.
 
-### 2. Mandatory Industrial Mentor Metadata
-Every article/post includes full rich metadata:
-- **Newspaper / Platform:** e.g. *The Economic Times*, *Mint*, *Twitter/X*, *Instagram*, *Facebook*
-- **Author / Journalist:** e.g. *Surabhi Agarwal*, *@FinTechDisrupt_Global*
-- **Page Number / Placement:** e.g. *Page 1 (Front Page Lead)*, *Page 4 (Banking & Finance)*
-- **Title / Headline & Short Description**
-- **SLA Telemetry Breakdown:** Published $\to$ Ingested $\to$ Triaged $\to$ Dispatched timestamps in milliseconds.
+### 2. Competitor Intelligence Radar
+- Live side-by-side sentiment and share-of-voice tracking across **Infosys, TCS, Wipro, and Accenture**.
+- Mathematical net sentiment parity scoring (-100 to +100).
+- Automatic vulnerability detection flagging competitor weaknesses with instant counter-play briefs.
 
-### 3. Competitor Radar (Desktop-Optimized)
-- Real-time side-by-side tracking of **Infosys vs. TCS, Wipro, and Accenture**.
-- Net sentiment parity score (-100 to +100).
-- Social share-of-voice breakdown across Twitter, Instagram, Facebook, and Print.
-- Automatic vulnerability detection (e.g. *TCS European Cloud Outage*) paired with instant market counter-play briefings for Infosys sales teams.
+### 3. Mathematical SLA Proof Engine
+- Real-time pipeline latency tracking (`published_at` $\to$ `ingested_at` $\to$ `triaged_at` $\to$ `dispatched_at`).
+- Explicit SLA compliance indicator verifying event-to-alert dispatch in **under 120 seconds** (typical: 14s – 38s).
+- One-click JSON audit report download for executive and regulatory verification.
 
-### 4. Interactive Tier-4 Voice Call Escalation Simulator
-- Simulates automated telephony calls (Twilio / Ultravox engine) to the Chief Crisis Officer.
-- Synthetic dual-tone telephone ringing.
-- Authoritative Text-to-Speech briefing synthesized directly in browser.
-- Real-time animated audio waveform visualizer.
-- Interactive DTMF dialer keypad:
-  - **Press 1:** Acknowledge alert and log to crisis room.
-  - **Press 2:** Bridge directly to Corporate PR & Legal Emergency Line.
+### 4. Intelligence Trend Analysis
+- 100% dynamically derived analytics bound to live article telemetry.
+- Real-time **Infosys Share of Voice**, **Negative Sentiment Ratio**, **Average Threat Level**, and **24h Mentions**.
+- Multi-bucket time-series sentiment and risk curves with graceful telemetry-building states.
 
-### 5. Multi-Channel Push Hub
-- Live previews of simultaneous dispatches to **WhatsApp Business**, **Slack War Room** (`#crisis-war-room-exec`), **Executive Email**, and **Voice Telephony**.
+### 5. Configured Intelligence Sources & Telemetry Wire
+- Real-time health monitoring of all configured ingestion streams:
+  - **NewsAPI Global Wire** (24/7 continuous stream)
+  - **GDELT DOC 2.0 Global Discovery** (Tone and thematic metadata)
+  - **The Guardian Open Platform** (Premium investigative wire)
+  - **The Economic Times & Google News RSS** (Verified corporate & tech wire)
+- Active connection health, latency measurements, and article counters.
 
-### 6. Mathematical SLA Proof Engine
-- Live running chronometer proving total pipeline elapsed time is strictly under 120 seconds (typical: 28s - 40s).
-- Zero-lag in-memory streaming proof.
-- Single-click JSON audit report download.
+### 6. Interactive Voice Escalation (Tier-4 Critical)
+- Automated telephony escalation simulation to the Chief Risk Officer / Crisis Lead.
+- Text-to-Speech audio synthesis with live audio waveform visualization.
+- Interactive DTMF response keypad:
+  - **Press 1**: Acknowledge alert and log to crisis room.
+  - **Press 2**: Bridge directly to Emergency PR & Legal Crisis War Room.
 
-### 7. Dual Viewport Switcher
-- Seamless toggle between **Full Desktop Command Center** and an on-screen **iPhone 16 Pro Executive Mobile Simulator** (plus 100% native mobile responsive layout).
+### 7. Responsive Mobile Navigation
+- **Desktop ( $\ge$ 768px)**: Fixed left sidebar with collapsible `>>` / `<<` controls, dense data tables, and comprehensive header metrics.
+- **Mobile (< 768px)**: Native bottom navigation bar with safe-area inset support:
+  - `Dashboard` | `Crisis War Room` | `Competitor Radar` | `SLA Engine` | `More`
+  - Smooth animated bottom sheet drawer accessing *Analysis*, *Reports*, *News Feed*, *Sources*, and *Alerts*.
+
+---
+
+## Getting Started
+
+### Prerequisites
+- **Node.js**: v18 or higher (v20 LTS recommended)
+- **npm** or **yarn**
+- **Ollama** (optional for local AI inference): [ollama.ai](https://ollama.ai/) with `qwen2.5:7b` pulled (`ollama run qwen2.5:7b`)
+- **Supabase Account**: (Pre-configured in environment)
+
+### 1. Installation
+
+Clone the repository and install dependencies for both server and client:
+
+```bash
+# Clone repository
+git clone https://github.com/aditya84ya/VEE-TECH.git
+cd VEE-TECH
+
+# Install backend dependencies
+cd server
+npm install
+
+# Install frontend dependencies
+cd ../client
+npm install
+```
+
+### 2. Environment Configuration
+
+#### Backend (`server/.env`):
+```env
+PORT=5000
+
+# Supabase Realtime & PostgreSQL
+SUPABASE_URL=https://your-project.supabase.co
+SUPABASE_SERVICE_ROLE_KEY=your-service-role-key
+SUPABASE_ANON_KEY=your-anon-key
+
+# Local Ollama AI Engine
+OLLAMA_BASE_URL=http://localhost:11434
+OLLAMA_MODEL=qwen2.5:7b
+
+# Ingestion API Keys
+NEWSAPI_KEY=your-newsapi-key
+GUARDIAN_API_KEY=your-guardian-api-key
+
+# Notification Channels (Optional / Sandbox)
+SLACK_WEBHOOK_URL=
+SENDGRID_API_KEY=
+SENDGRID_FROM_EMAIL=
+TWILIO_ACCOUNT_SID=
+TWILIO_AUTH_TOKEN=
+```
+
+#### Frontend (`client/.env`):
+```env
+VITE_API_BASE_URL=http://localhost:5000
+VITE_SUPABASE_URL=https://your-project.supabase.co
+VITE_SUPABASE_ANON_KEY=your-anon-key
+```
+
+### 3. Running Locally
+
+Start the backend and frontend in separate terminals:
+
+```bash
+# Terminal 1: Backend Ingestion & Triage Server (Port 5000)
+cd server
+npm run dev
+
+# Terminal 2: React / Vite Dashboard (Port 5173)
+cd client
+npm run dev
+```
+
+Open [http://localhost:5173](http://localhost:5173) in your browser to access the VEE-ALERT platform.
+
+---
+
+## API Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/api/articles` | Retrieve all active articles (Supabase / in-memory fallback) |
+| `POST` | `/api/fetch-live` | Trigger immediate live multi-source scraping and triage |
+| `POST` | `/api/news/fetch` | On-demand aggregation across all configured streams |
+| `PATCH` | `/api/articles/:id/acknowledge` | Acknowledge a high-priority crisis article |
+| `GET` | `/api/health` | Backend and subsystem health check |
+
+---
+
+## Tech Stack
+
+- **Frontend**: React 18, TypeScript, Vite, Tailwind CSS, Lucide Icons, Date-fns
+- **Backend**: Node.js, Express, Axios, Cheerio, Tsx
+- **Database / Sync**: Supabase (PostgreSQL, Realtime WebSockets)
+- **AI / LLM Engine**: Ollama (`qwen2.5:7b` locally hosted on GPU/CPU)
+- **Telephony & Alerts**: Twilio Voice, Slack Webhooks, SendGrid, Meta WhatsApp Cloud
+
+---
+
+## License
+
+This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
